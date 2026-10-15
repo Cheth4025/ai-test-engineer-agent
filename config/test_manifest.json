@@ -1,0 +1,36 @@
+{
+  "manifest_version": 1,
+  "tests": [
+    {
+      "test_id": "T01",
+      "node_id": "tests/payment/test_payment.py::test_t01_initial_success",
+      "scenario_id": "S01",
+      "rule_ids": ["BR01"]
+    },
+    {
+      "test_id": "T02",
+      "node_id": "tests/payment/test_payment.py::test_t02_timeout_identical_retry",
+      "scenario_id": "S02",
+      "rule_ids": ["BR01", "BR02", "BR04", "BR05"]
+    },
+    {
+      "test_id": "T03",
+      "node_id": "tests/payment/test_payment.py::test_t03_conflicting_amount",
+      "scenario_id": "S03",
+      "rule_ids": ["BR01", "BR03"]
+    },
+    {
+      "test_id": "T04",
+      "node_id": "tests/payment/test_payment.py::test_t04_duplicate_callback",
+      "scenario_id": "S04",
+      "rule_ids": ["BR06"]
+    },
+    {
+      "test_id": "T05",
+      "node_id": "tests/payment/test_payment.py::test_t05_delayed_success",
+      "scenario_id": "S05",
+      "rule_ids": ["BR01", "BR02", "BR04", "BR05"]
+    }
+  ],
+  "_todo": "Code fingerprints (per 08 Section 2) deferred to the approval/orchestration milestone, once test_payment.py is final and a hashing utility exists."
+}

@@ -1,0 +1,117 @@
+{
+  "required_scenarios": ["S01", "S02", "S03", "S04", "S05"],
+  "scenarios": {
+    "S01": {
+      "scenario_id": "S01",
+      "title": "Initial success",
+      "test_id": "T01",
+      "rule_ids": ["BR01"],
+      "required_preconditions": [
+        "P-001 with K-001 and 100.00 USD",
+        "gateway returns success"
+      ],
+      "required_action_codes": ["SUBMIT_SUCCESS"],
+      "required_assertions": [
+        {"observation": "gateway_charge_count", "operator": "EQ", "expected": 1},
+        {"observation": "ledger_success_count", "operator": "EQ", "expected": 1},
+        {"observation": "payment_state", "operator": "EQ", "expected": "SUCCESS"},
+        {"observation": "amount", "operator": "EQ", "expected": "100.00"},
+        {"observation": "currency", "operator": "EQ", "expected": "USD"}
+      ]
+    },
+    "S02": {
+      "scenario_id": "S02",
+      "title": "Timeout and identical retry",
+      "test_id": "T02",
+      "rule_ids": ["BR01", "BR02", "BR04", "BR05"],
+      "required_preconditions": [
+        "The original request with K-001 commits one gateway charge but its response times out",
+        "status verification subsequently returns original success"
+      ],
+      "required_action_codes": [
+        "SUBMIT_COMMITTED_TIMEOUT",
+        "RETRY_IDENTICAL_VERIFY_SUCCESS"
+      ],
+      "required_assertions": [
+        {"observation": "timeout_not_failed", "operator": "EQ", "expected": true},
+        {"observation": "status_verification_before_retry_charge", "operator": "PRECEDES", "expected": true},
+        {"observation": "same_idempotency_key", "operator": "EQ", "expected": true},
+        {"observation": "same_payload", "operator": "EQ", "expected": true},
+        {"observation": "gateway_charge_count", "operator": "EQ", "expected": 1},
+        {"observation": "ledger_success_count", "operator": "EQ", "expected": 1},
+        {"observation": "payment_state", "operator": "EQ", "expected": "SUCCESS"},
+        {"observation": "amount", "operator": "EQ", "expected": "100.00"},
+        {"observation": "currency", "operator": "EQ", "expected": "USD"}
+      ]
+    },
+    "S03": {
+      "scenario_id": "S03",
+      "title": "Same key with conflicting amount",
+      "test_id": "T03",
+      "rule_ids": ["BR01", "BR03"],
+      "required_preconditions": [
+        "K-001 already identifies a successful 100.00 USD payment"
+      ],
+      "required_action_codes": [
+        "SUBMIT_SUCCESS",
+        "SUBMIT_CONFLICTING_AMOUNT"
+      ],
+      "required_assertions": [
+        {"observation": "conflict_rejected", "operator": "EQ", "expected": true},
+        {"observation": "original_financial_records_unchanged", "operator": "EQ", "expected": true},
+        {"observation": "gateway_charge_count", "operator": "EQ", "expected": 1},
+        {"observation": "ledger_success_count", "operator": "EQ", "expected": 1},
+        {"observation": "payment_state", "operator": "EQ", "expected": "SUCCESS"},
+        {"observation": "amount", "operator": "EQ", "expected": "100.00"},
+        {"observation": "currency", "operator": "EQ", "expected": "USD"}
+      ]
+    },
+    "S04": {
+      "scenario_id": "S04",
+      "title": "Duplicate successful callback",
+      "test_id": "T04",
+      "rule_ids": ["BR06"],
+      "required_preconditions": [
+        "Callback C-001 for P-001 has established success with one ledger posting and one gateway charge"
+      ],
+      "required_action_codes": [
+        "DELIVER_DUPLICATE_SUCCESS_CALLBACK"
+      ],
+      "required_assertions": [
+        {"observation": "ledger_success_count", "operator": "EQ", "expected": 1},
+        {"observation": "gateway_charge_count", "operator": "EQ", "expected": 1},
+        {"observation": "payment_state", "operator": "EQ", "expected": "SUCCESS"},
+        {"observation": "amount", "operator": "EQ", "expected": "100.00"},
+        {"observation": "currency", "operator": "EQ", "expected": "USD"}
+      ]
+    },
+    "S05": {
+      "scenario_id": "S05",
+      "title": "Delayed success after timeout",
+      "test_id": "T05",
+      "rule_ids": ["BR01", "BR02", "BR04", "BR05"],
+      "required_preconditions": [
+        "Original request with K-001 commits one charge but times out",
+        "first status verification remains unresolved",
+        "original success callback is queued"
+      ],
+      "required_action_codes": [
+        "SUBMIT_COMMITTED_TIMEOUT",
+        "RETRY_IDENTICAL_VERIFY_UNRESOLVED",
+        "DELIVER_SUCCESS_CALLBACK",
+        "RESOLVE_ORIGINAL_RETRY"
+      ],
+      "required_assertions": [
+        {"observation": "timeout_not_failed", "operator": "EQ", "expected": true},
+        {"observation": "delayed_success_resolves_original", "operator": "EQ", "expected": true},
+        {"observation": "same_idempotency_key", "operator": "EQ", "expected": true},
+        {"observation": "same_payload", "operator": "EQ", "expected": true},
+        {"observation": "gateway_charge_count", "operator": "EQ", "expected": 1},
+        {"observation": "ledger_success_count", "operator": "EQ", "expected": 1},
+        {"observation": "payment_state", "operator": "EQ", "expected": "SUCCESS"},
+        {"observation": "amount", "operator": "EQ", "expected": "100.00"},
+        {"observation": "currency", "operator": "EQ", "expected": "USD"}
+      ]
+    }
+  }
+}

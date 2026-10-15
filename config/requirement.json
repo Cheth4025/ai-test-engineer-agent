@@ -1,0 +1,7 @@
+{
+  "requirement_id": "PAYMENT_RETRY_REQUIREMENT",
+  "source_version": "sha256:8e8455adfa6665e147dfab80d8a866f26d75424893060c431b611fc1c88aed7d",
+  "source_hash": "8e8455adfa6665e147dfab80d8a866f26d75424893060c431b611fc1c88aed7d",
+  "authority_file_sha256": "f846df6edb7e23ea70396a4a4f9e6f6b81a12101bb8c9eaccfa64db5cfe734da",
+  "text": "As a customer, I want to retry a payment when the payment gateway times out, without being charged twice.\nBR01: Every payment request must include a unique idempotency key for its logical payment; retries reuse that key.\nBR02: Reusing the same key with the same payload resolves the original payment and must not create another charge.\nBR03: Reusing the same key with a different payment amount is rejected; the original charge and ledger remain unchanged.\nBR04: A timeout must not automatically mark the payment as failed. Retain its unresolved outcome until status verification or a callback establishes the result.\nBR05: Verify the original payment status before initiating another charge. If already successful, return the original result. If unresolved, do not create a new charge; retain the unresolved outcome until the scripted original success is available.\nBR06: Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting."
+}
