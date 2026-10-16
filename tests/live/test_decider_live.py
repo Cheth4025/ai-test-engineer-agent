@@ -52,6 +52,17 @@ def test_live_choice_and_noul_smoke():
         model=response["model"],
     )
 
+    print(f"\nmodel: {response['model']}")
+    print(f"usage: {response['usage']}")
+    print(f"latency_ms (self-measured round trip): {response['latency_ms']}")
+    for verdict in (choice_verdict, noul_verdict):
+        print(
+            f"\n{verdict.question}: answer={verdict.answer!r} suggestion={verdict.suggestion!r} "
+            f"confidence={verdict.confidence:.4f} route={verdict.route} "
+            f"probabilities={verdict.probabilities!r} host_label={verdict.host_label} "
+            f"model={verdict.model} latency_ms={verdict.latency_ms}"
+        )
+
     assert choice_verdict.confidence is not None
     assert 0.0 <= choice_verdict.confidence <= 1.0
     assert noul_verdict.confidence is not None
