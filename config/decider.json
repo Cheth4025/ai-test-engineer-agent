@@ -1,0 +1,13 @@
+{
+  "url": "http://127.0.0.1:8000",
+  "model": "StrandsAgents/strands-decider-2B-hobson-v19",
+  "host_label": "local-cpu",
+  "choice_threshold": 0.75,
+  "noul_upper": 0.80,
+  "noul_lower": 0.40,
+  "timeouts": {
+    "connect_s": 5,
+    "call_s_cpu": 30,
+    "call_s_gpu": 10
+  }
+}
