@@ -114,6 +114,32 @@ def _paused(run_id: str, controller: RunController) -> dict:
     }
 
 
+def _unexpected_interrupt_stop(run_id: str, controller: RunController, result, context: str) -> dict:
+    """An agent() call that was not expected to pause (interpret_requirement's
+    ungated turn, or a just-resumed turn) instead raised an interrupt -- e.g.
+    the model called a gated tool (generate_scenarios/save_scenario_set)
+    before orchestration asked it to, and that call escalated. Strands'
+    Agent._interrupt_state stays activated=True until that interrupt is
+    answered; the NEXT agent() call in this run is always a plain string
+    prompt, and _InterruptState.resume() raises TypeError on a string while
+    activated (see strands/interrupt.py) -- so this must never be allowed to
+    fall through silently. Stop the run here instead, with evidence of
+    exactly which interrupt(s) were pending and why.
+    """
+    interrupts = [{"id": i.id, "name": i.name, "reason": i.reason} for i in (result.interrupts or [])]
+    controller.save_evidence(
+        "unexpected_interrupt.json", {"context": context, "interrupts": interrupts}
+    )
+    controller.set_workflow_state("STOPPED", stage="STOPPED", busy=False)
+    return {
+        "run_id": run_id,
+        "workflow_state": "STOPPED",
+        "stage": "STOPPED",
+        "error": f"unexpected interrupt during {context}",
+        "interrupts": interrupts,
+    }
+
+
 def _finish_run(run_id: str) -> dict:
     run = _ACTIVE_RUNS[run_id]
     controller: RunController = run["controller"]
@@ -232,6 +258,12 @@ def run_initial_pass() -> dict:
     try:
         result = agent(_interpretation_prompt(requirement_text))  # ungated
         _ACTIVE_RUNS[run_id]["last_result"] = result
+        if result.stop_reason == "interrupt":
+            # interpret_requirement itself never gates; a pending interrupt here
+            # means the model called a gated tool early in this same turn and it
+            # escalated. Never fall through to the next (string-prompt) agent()
+            # call -- see _unexpected_interrupt_stop's docstring.
+            return _unexpected_interrupt_stop(run_id, controller, result, "interpret_requirement turn")
         interpretation = attempt_log.get_result("interpret_requirement")
         if interpretation is None:
             raise RuntimeError(
@@ -316,6 +348,13 @@ def resume_pending_decision(run_id: str, human_choice: str) -> dict:
         ]
     )
     run["last_result"] = result
+    if result.stop_reason == "interrupt":
+        # A second, different escalation surfaced in the same resumed turn
+        # (e.g. the model called another gated tool right after this one was
+        # answered). resume_pending_decision only knows how to apply ONE
+        # human answer per call; never fall through to _drive_recheck's
+        # string-prompt agent() calls with this interrupt still pending.
+        return _unexpected_interrupt_stop(run_id, controller, result, "resume_pending_decision")
 
     if outcome == "REMEDIATION_SCHEDULED":
         return _drive_recheck(run_id, feedback)
