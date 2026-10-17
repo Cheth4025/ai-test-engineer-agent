@@ -2,9 +2,15 @@
 
 Run with: .venv/Scripts/python.exe -m streamlit run src/ai_test_engineer/ui.py
 
-One page, four native tabs in docs/06_Streamlit_UI_Specification.md Section 2
-order. Reads the existing RunController + run files only -- no new
-orchestration logic, no new agents.
+One page: a fixed dark top bar, a dark left sidebar with run status and
+navigation, and a main area that renders exactly one of the same four
+sections docs/06_Streamlit_UI_Specification.md Section 2 defines -- layout
+only, an owner-approved deviation from 06 Section 1's "four native tabs" /
+mockups README deviation #1 (see docs/mockups/README.md row 1). Navigation
+is a plain st.radio in the sidebar (its value lives in st.session_state via
+its key, same as any other widget) -- selecting a section never starts
+work, same guarantee tabs gave. Reads the existing RunController + run
+files only -- no new orchestration logic, no new agents.
 
 Process model: Streamlit reruns this whole script on every interaction, but
 the Python process (and orchestration._ACTIVE_RUNS, a module-level dict)
@@ -47,12 +53,20 @@ from ai_test_engineer.state import RunController
 
 CONFIG_DIR = orchestration.CONFIG_DIR
 
-TAB_TITLES = [
+SECTIONS = [
     "Overview & Requirements",
     "Scenarios & Coverage",
     "Approval & Execution",
     "Results & Report",
 ]
+
+# Which section owns the Confirm decision control for a given pending
+# checkpoint tool -- the sidebar points the user there when a decision is
+# awaiting confirmation but they're looking at a different section.
+PENDING_SECTION_FOR_TOOL = {
+    "generate_scenarios": SECTIONS[0],
+    "save_scenario_set": SECTIONS[1],
+}
 
 # Doc 06's two escalation checkpoints and their fixed option sets -- same
 # mapping scripts/run_initial_pass.py._options_for hardcodes. Presentation
@@ -373,23 +387,88 @@ def gather_display_data(state: UIState) -> dict:
 # Rendering -- Streamlit-dependent; exercised by tests/ui/test_ui_apptest.py.
 # ---------------------------------------------------------------------------
 
+# Top-bar text and Approve/Reject's fixed colors have no [theme]/[theme.sidebar]
+# config equivalent (theme options style the main area and sidebar, never
+# Streamlit's own header chrome, and there's no per-button color option) --
+# both are explicitly requested as scoped CSS. Padding is deliberately NOT
+# done here: theme.paddingTop/theme.sidebar.paddingTop in .streamlit/config.toml
+# is the native, officially-recommended mechanism (Streamlit's own guidance
+# is to avoid CSS .block-container padding), and already reserves space for
+# the header's height automatically.
+_CSS = """
+<style>
+[data-testid="stHeader"] {
+    background-color: #0F1B2D;
+}
+[data-testid="stHeader"]::before {
+    content: "AI Test Engineer Agent";
+    position: absolute;
+    left: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #F5F5F5;
+    font-size: 1.15rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.st-key-approve_btn button {
+    background-color: #16A34A !important;
+    color: #FFFFFF !important;
+    border-color: #16A34A !important;
+}
+.st-key-reject_btn button {
+    background-color: #DC2626 !important;
+    color: #FFFFFF !important;
+    border-color: #DC2626 !important;
+}
+/* Disabled must still look clearly disabled (grey) -- declared after the
+   rules above and :disabled is more specific, so this wins over the fixed
+   green/red whenever the button is actually disabled. */
+.st-key-approve_btn button:disabled,
+.st-key-reject_btn button:disabled {
+    background-color: #E5E7EB !important;
+    color: #9CA3AF !important;
+    border-color: #D1D5DB !important;
+}
+</style>
+"""
 
-def _render_header(state: UIState, data: dict) -> None:
+
+def _inject_css() -> None:
+    st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def _render_sidebar(state: UIState, data: dict) -> str:
+    """Run status + navigation, all in the dark left sidebar (docs/mockups/
+    README.md row 1, owner-approved layout change -- see module docstring).
+    Navigation is a plain st.radio: selecting a section is read-only and
+    never calls start_analysis/confirm_decision, same guarantee the former
+    st.tabs gave (tests/ui/test_ui_apptest.py's reload-safety test covers
+    this directly)."""
     controller: RunController | None = data["controller"]
-    cols = st.columns([3, 2, 2, 2])
-    cols[0].markdown("### AI Test Engineer Agent -- Payment Retry & Duplicate Charge Prevention")
-    cols[1].metric("Run ID", controller.run_id if controller else "(none)")
-    workflow_state = controller.workflow_state if controller else "(no run)"
-    stage = controller.stage if controller else "(no run)"
-    cols[2].metric("Workflow state", workflow_state, help=f"stage: {stage}")
-    busy = state.worker_busy or (controller.busy if controller else False)
-    cols[3].metric("Decider host", data["host_label"], help="busy" if busy else "idle")
-    if busy:
-        st.info("Working...")
-    if state.last_error:
-        st.error(f"Last run failed: {state.last_error}")
-    if st.button("Refresh Status"):
-        st.rerun()
+    with st.sidebar:
+        st.caption("Payment Retry & Duplicate Charge Prevention")
+        st.metric("Run ID", controller.run_id if controller else "(none)")
+        workflow_state = controller.workflow_state if controller else "(no run)"
+        stage = controller.stage if controller else "(no run)"
+        st.metric("Workflow state", workflow_state, help=f"stage: {stage}")
+        busy = state.worker_busy or (controller.busy if controller else False)
+        st.metric("Decider host", data["host_label"], help="busy" if busy else "idle")
+        if busy:
+            st.info("Working...")
+        if state.last_error:
+            st.error(f"Last run failed: {state.last_error}")
+        if st.button("Refresh Status", type="secondary"):
+            st.rerun()
+
+        if controller is not None and controller.pending_decision is not None:
+            target_section = PENDING_SECTION_FOR_TOOL.get(controller.pending_decision.get("tool_name"))
+            if target_section is not None:
+                st.warning(f"A decision needs your confirmation -- see '{target_section}'.")
+
+        st.divider()
+        section = st.radio("Navigation", SECTIONS, key="nav_section")
+    return section
 
 
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
@@ -417,12 +496,14 @@ def _render_confirm_decision(state: UIState, controller: RunController) -> None:
         )
 
     choice = st.radio("Your choice", options, index=default_index, key=f"confirm_{controller.run_id}")
-    if st.button("Confirm decision", disabled=not can_confirm_decision(state, controller)):
+    if st.button(
+        "Confirm decision", type="primary", disabled=not can_confirm_decision(state, controller)
+    ):
         confirm_decision(state, choice)
         st.rerun()
 
 
-def _render_tab_overview(state: UIState, data: dict) -> None:
+def _render_section_overview(state: UIState, data: dict) -> None:
     requirement = data["requirement"] or {}
     controller: RunController | None = data["controller"]
 
@@ -447,7 +528,9 @@ def _render_tab_overview(state: UIState, data: dict) -> None:
                 st.write(f"- ({label}, {ambiguity.get('status')}) {ambiguity.get('question')}")
 
     label = "New Analysis" if state.current_run_id is not None else "Start Analysis"
-    if st.button(label, disabled=not can_start_analysis(state, controller)):
+    if st.button(
+        label, type="primary", key="start_or_new_analysis_btn", disabled=not can_start_analysis(state, controller)
+    ):
         start_analysis(state)
         st.rerun()
 
@@ -475,7 +558,7 @@ def _render_coverage_table(label: str, coverage: dict) -> None:
     )
 
 
-def _render_tab_scenarios(state: UIState, data: dict) -> None:
+def _render_section_scenarios(state: UIState, data: dict) -> None:
     controller: RunController | None = data["controller"]
     if controller is None:
         st.info("No run yet.")
@@ -516,7 +599,7 @@ def _render_tab_scenarios(state: UIState, data: dict) -> None:
                         key=f"res_{version}_{scenario_id}",
                     )
                     note = st.text_input("Note (optional)", key=f"note_{version}_{scenario_id}")
-                    if st.form_submit_button("Resolve", disabled=state.worker_busy):
+                    if st.form_submit_button("Resolve", type="secondary", disabled=state.worker_busy):
                         with state.lock:  # serialize against a worker thread writing the same run's files
                             controller.resolve_grounding(version, scenario_id, resolution, note or None)
                         st.rerun()
@@ -538,16 +621,20 @@ def _render_tab_scenarios(state: UIState, data: dict) -> None:
         _render_confirm_decision(state, controller)
 
 
-def _render_tab_approval(state: UIState, data: dict) -> None:
+def _render_section_approval(state: UIState, data: dict) -> None:
     st.info("Approval & Execution is the next milestone -- NOT RUN.")
     test_manifest = _load_json(CONFIG_DIR / "test_manifest.json") or {}
     st.table(test_manifest.get("tests", []))
-    st.button("Approve", disabled=True)
-    st.button("Reject", disabled=True)
-    st.button("Execute", disabled=True)
+    # Colors only (layout, no behavior change) -- all three stay disabled
+    # placeholders this milestone. Approve/Reject's green/red come from the
+    # .st-key-approve_btn/.st-key-reject_btn CSS rules in _CSS; Execute uses
+    # the plain primary teal like the other main actions.
+    st.button("Approve", key="approve_btn", disabled=True)
+    st.button("Reject", key="reject_btn", disabled=True)
+    st.button("Execute", type="primary", key="execute_btn", disabled=True)
 
 
-def _render_tab_results(state: UIState, data: dict) -> None:
+def _render_section_results(state: UIState, data: dict) -> None:
     st.markdown("#### Decision audit")
     records = data.get("decisions") or []
     st.table(
@@ -575,27 +662,28 @@ def _render_tab_results(state: UIState, data: dict) -> None:
     st.info("Results & Report is the next milestone -- NOT RUN.")
 
 
+_SECTION_RENDERERS = {
+    SECTIONS[0]: _render_section_overview,
+    SECTIONS[1]: _render_section_scenarios,
+    SECTIONS[2]: _render_section_approval,
+    SECTIONS[3]: _render_section_results,
+}
+
+
 def main() -> None:
     st.set_page_config(page_title="AI Test Engineer Agent", layout="wide")
+    _inject_css()
     state = get_ui_state()
 
-    # One fragment for the whole page (header + all four tabs): a worker
-    # finishing must refresh everything on the next tick, not just the
-    # header, or the Confirm decision control / Start button's disabled
+    # One fragment for the whole page (sidebar + the selected section): a
+    # worker finishing must refresh everything on the next tick, not just
+    # part of it, or the Confirm decision control / Start button's disabled
     # state would stay stale until a manual Refresh Status click.
     @st.fragment(run_every=2)
     def _app_fragment() -> None:
         data = gather_display_data(state)
-        _render_header(state, data)
-        tabs = st.tabs(TAB_TITLES)
-        with tabs[0]:
-            _render_tab_overview(state, data)
-        with tabs[1]:
-            _render_tab_scenarios(state, data)
-        with tabs[2]:
-            _render_tab_approval(state, data)
-        with tabs[3]:
-            _render_tab_results(state, data)
+        section = _render_sidebar(state, data)
+        _SECTION_RENDERERS[section](state, data)
 
     _app_fragment()
 

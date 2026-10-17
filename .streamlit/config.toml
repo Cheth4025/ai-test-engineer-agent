@@ -3,3 +3,24 @@
 # on the network.
 [server]
 address = "127.0.0.1"
+
+[client]
+# Hides the Deploy button -- this is a local tool, not something to deploy.
+toolbarMode = "viewer"
+
+[theme]
+# Main accent color for primary-type buttons (Start Analysis, Confirm
+# decision, Execute). Main content area keeps the default light background
+# -- only the top bar (via scoped CSS in ui.py) and the sidebar (below) are
+# dark navy, per the owner-approved layout change.
+primaryColor = "#0D9488"
+# Native gap under the header (Streamlit reserves the header's own height
+# automatically on top of this) -- the officially recommended way to add
+# top clearance, instead of CSS .block-container padding.
+paddingTop = "2rem"
+
+[theme.sidebar]
+backgroundColor = "#0F1B2D"
+secondaryBackgroundColor = "#1B2A42"
+textColor = "#F5F5F5"
+paddingTop = "2rem"

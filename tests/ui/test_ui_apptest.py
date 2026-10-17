@@ -1,5 +1,12 @@
 """Streamlit AppTest smoke tests for src/ai_test_engineer/ui.py.
 
+Navigation is a sidebar radio (docs/mockups/README.md row 1, owner-approved
+layout change) that selects which of the four sections renders in the main
+area -- unlike the former st.tabs, only the SELECTED section's content and
+controls exist in the rendered tree, so most tests here navigate to the
+right section with _navigate() before looking for a button/control that
+section owns.
+
 Orchestration stubbed throughout -- no real Bedrock/Decider calls, matching
 tests/unit/test_orchestration_stubbed.py's "no Bedrock, no GPU, no network"
 principle, but at the UI-wiring level rather than re-testing orchestration's
@@ -19,7 +26,7 @@ import pytest
 pytest.importorskip("streamlit.testing.v1")
 from streamlit.testing.v1 import AppTest
 
-from ai_test_engineer import orchestration
+from ai_test_engineer import orchestration, ui
 from ai_test_engineer.state import RunController
 
 
@@ -90,19 +97,53 @@ def _has_label(at: AppTest, widget: str, label: str) -> bool:
     return any(w.label == label for w in getattr(at, widget))
 
 
-def test_app_loads_with_four_tabs_and_start_analysis_button(monkeypatch, tmp_path, ui_script_path):
+def _navigate(at: AppTest, section: str) -> AppTest:
+    """Selects a sidebar navigation section -- the same action a user
+    clicking the radio performs. Never starts work by itself (proven by
+    test_navigating_sections_never_calls_orchestration_entry_points)."""
+    at.sidebar.radio[0].set_value(section).run()
+    return at
+
+
+def test_app_loads_with_sidebar_nav_and_start_analysis_button(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
 
     assert not at.exception
-    assert [tab.label for tab in at.tabs] == [
-        "Overview & Requirements",
-        "Scenarios & Coverage",
-        "Approval & Execution",
-        "Results & Report",
-    ]
+    nav_radios = [r for r in at.sidebar.radio if r.label == "Navigation"]
+    assert len(nav_radios) == 1
+    assert nav_radios[0].value == ui.SECTIONS[0]  # default section
     assert any(b.label == "Start Analysis" for b in at.button)
+
+
+def test_sidebar_navigation_reaches_all_four_sections(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+
+    for section in ui.SECTIONS:
+        at = _navigate(at, section)
+        assert not at.exception
+        assert [r for r in at.sidebar.radio if r.label == "Navigation"][0].value == section
+
+
+def test_navigating_sections_never_calls_orchestration_entry_points(monkeypatch, tmp_path, ui_script_path):
+    """Selecting a sidebar section is read-only, exactly like the former
+    st.tabs -- it must never call either orchestration entry point."""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("navigating sections must never call this")
+
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setattr(orchestration, "run_initial_pass", _boom)
+    monkeypatch.setattr(orchestration, "resume_pending_decision", _boom)
+
+    at = _app(ui_script_path)
+    at.run()
+    for section in ui.SECTIONS:
+        at = _navigate(at, section)
+        assert not at.exception
 
 
 def test_plain_reload_never_calls_orchestration_entry_points(monkeypatch, tmp_path, ui_script_path):
@@ -123,10 +164,11 @@ def test_plain_reload_never_calls_orchestration_entry_points(monkeypatch, tmp_pa
     assert not at.exception
 
 
-def test_approval_and_results_tabs_show_disabled_not_run_placeholders(monkeypatch, tmp_path, ui_script_path):
+def test_approval_section_shows_disabled_not_run_placeholders(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "Approval & Execution")
 
     assert not at.exception
     approve = next(b for b in at.button if b.label == "Approve")
@@ -171,6 +213,20 @@ def _register_paused_run(tmp_path, run_id: str, tool_name: str, verdicts: dict |
     }
 
 
+def test_sidebar_shows_notice_pointing_to_section_with_pending_decision(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start Analysis").click().run()
+    at = _settle(at, lambda a: any("Scenarios & Coverage" in w.value for w in a.sidebar.warning))
+
+    assert not at.exception
+    assert any("Scenarios & Coverage" in w.value for w in at.sidebar.warning)
+
+
 def test_start_analysis_settles_into_confirm_decision_control_with_suggested_option(
     monkeypatch, tmp_path, ui_script_path
 ):
@@ -181,6 +237,7 @@ def test_start_analysis_settles_into_confirm_decision_control_with_suggested_opt
     at = _app(ui_script_path)
     at.run()
     next(b for b in at.button if b.label == "Start Analysis").click().run()
+    at = _navigate(at, "Scenarios & Coverage")  # save_scenario_set's Confirm control lives here
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     assert not at.exception
@@ -221,6 +278,7 @@ def test_confirm_decision_preselects_suggestion_with_realistic_multi_question_ve
     at = _app(ui_script_path)
     at.run()
     next(b for b in at.button if b.label == "Start Analysis").click().run()
+    at = _navigate(at, "Scenarios & Coverage")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     radios = [r for r in at.radio if r.label == "Your choice"]
@@ -250,6 +308,7 @@ def test_confirm_decision_applies_choice_through_resume_pending_decision(monkeyp
     at = _app(ui_script_path)
     at.run()
     next(b for b in at.button if b.label == "Start Analysis").click().run()
+    at = _navigate(at, "Scenarios & Coverage")
     at = _settle(at, lambda a: _has_label(a, "button", "Confirm decision"))
 
     next(b for b in at.button if b.label == "Confirm decision").click().run()
@@ -372,6 +431,7 @@ def test_resolve_grounding_control_updates_effective_coverage_display(monkeypatc
     at = _app(ui_script_path)
     at.run()
     next(b for b in at.button if b.label == "Start Analysis").click().run()
+    at = _navigate(at, "Scenarios & Coverage")
     at = _settle(at, lambda a: _has_label(a, "button", "Resolve"))
 
     assert not at.exception
@@ -391,7 +451,9 @@ def test_resolve_grounding_control_updates_effective_coverage_display(monkeypatc
     assert recorded["covered"] == 5
 
 
-def test_tab4_audit_table_shows_real_decisions_with_suggestion_column(monkeypatch, tmp_path, ui_script_path):
+def test_results_section_audit_table_shows_real_decisions_with_suggestion_column(
+    monkeypatch, tmp_path, ui_script_path
+):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     run_dir = tmp_path / "run-1"
     controller = RunController("run-1", run_dir)
@@ -417,6 +479,7 @@ def test_tab4_audit_table_shows_real_decisions_with_suggestion_column(monkeypatc
     at = _app(ui_script_path)
     at.run()
     next(b for b in at.button if b.label == "Start Analysis").click().run()
+    at = _navigate(at, "Results & Report")
     at = _settle(at, lambda a: any("suggestion" in getattr(t.value, "columns", []) for t in a.table))
 
     assert not at.exception
