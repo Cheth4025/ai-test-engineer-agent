@@ -1,0 +1,5 @@
+# Loopback only (docs/06_Streamlit_UI_Specification.md Section 1): this app
+# is a single-process, single-run local tool, never intended to be exposed
+# on the network.
+[server]
+address = "127.0.0.1"

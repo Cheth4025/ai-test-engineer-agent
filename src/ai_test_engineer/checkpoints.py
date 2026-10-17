@@ -596,6 +596,20 @@ def build_all(
             _decision_record(tool_name, verdicts, action, controller, decider_cfg, host_label)
         )
         if isinstance(action, Confirm):
+            if tool_name == "save_scenario_set":
+                # decider_gate's resolve() -- where build_coverage_checkpoint's
+                # own record_grounding call lives -- is never invoked once ANY
+                # verdict in this checkpoint escalates (see decider_gate/
+                # intervention.py: a Confirm short-circuits before resolve()).
+                # Without this, grounding_vN.json would never be written for
+                # an escalated COVERAGE checkpoint, silently leaving
+                # unresolved_grounding_flags()/approval_blockers() empty.
+                # grounding_items() already maps an ESCALATE verdict to
+                # NEEDS_REVIEW; holder["coverage"] was set by build_questions'
+                # _compute() before Decider was ever asked, so it's always
+                # populated by the time any decision (AUTO or escalated) fires.
+                coverage = holder["coverage"]
+                controller.record_grounding(coverage["scenario_set_version"], grounding_items(coverage, verdicts))
             pending_ctx = dict(holder) if tool_name == "save_scenario_set" else {}
             controller.set_pending_decision(
                 {
