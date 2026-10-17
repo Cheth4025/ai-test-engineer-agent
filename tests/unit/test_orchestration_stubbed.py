@@ -395,6 +395,113 @@ def test_retry_with_new_tool_use_id_reuses_human_answer_and_still_reaches_five_o
     assert decider_gate_rows[2]["tool_use_id"] != decider_gate_rows[0]["tool_use_id"]
 
 
+def _coverage_always_escalates_handler(request: httpx.Request) -> httpx.Response:
+    """AMBIGUITY+STRATEGY behaves like the happy path (AUTO); COVERAGE always
+    escalates REMEDIATE_GAP, regardless of version -- lets a test drive past
+    a SECOND remediation attempt into BLOCKED, deterministically."""
+    body = json.loads(request.content)
+    questions = body["questions"]
+    if "strategy_action" in questions:
+        return _happy_path_decider_handler(request)
+    if "coverage_action" in questions:
+        answers = {}
+        for name in questions:
+            if name == "coverage_action":
+                answers[name] = {
+                    "type": "choice",
+                    "choice": "REMEDIATE_GAP",
+                    "probabilities": {"ACCEPT_COVERAGE": 0.45, "REMEDIATE_GAP": 0.55},
+                    "confidence": 0.55,  # below threshold -> ESCALATE
+                }
+            elif name.startswith("grounding_"):
+                answers[name] = {"type": "noul", "noul": 0.95}
+            else:
+                raise AssertionError(f"unexpected question {name!r}")
+        return httpx.Response(200, json={"model": "m", "answers": answers, "usage": {}})
+    raise AssertionError(f"unrecognized checkpoint questions: {list(questions)!r}")
+
+
+def test_second_remediation_sends_grounded_prompt_and_blocked_path_persists_coverage_v2(
+    monkeypatch, tmp_path
+):
+    """Reproduces live run 20261017T144027Z_15ed6d52: the remediation call
+    sent S04's feedback text but no catalog grounding (required_action_codes/
+    required_assertions), so a weaker model's regenerated S04 could easily
+    come back INVALID again; a second REMEDIATE_GAP then went BLOCKED with
+    no coverage_v2.json ever written, hiding WHY S04 was invalid."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    requirement_text, catalog = _load_requirement_and_catalog()
+    rules = _rules_from_requirement(requirement_text)
+
+    captured_prompts: list[str] = []
+    real_remediation_prompt = orchestration._remediation_prompt
+
+    def _capturing_remediation_prompt(target_ids, catalog_arg, feedback):
+        prompt = real_remediation_prompt(target_ids, catalog_arg, feedback)
+        captured_prompts.append(prompt)
+        return prompt
+
+    monkeypatch.setattr(orchestration, "_remediation_prompt", _capturing_remediation_prompt)
+
+    invalid_s04 = _scenario_from_catalog(catalog, "S04")
+    invalid_s04["action_codes"] = ["WRONG_CODE"]  # validator will mark this row INVALID
+
+    model = ScriptedModel(
+        turns=[
+            [("interpret_requirement", {"rules": rules, "ambiguities": []})],
+            "Interpretation recorded.",
+            [
+                (
+                    "generate_scenarios",
+                    {
+                        "target_ids": orchestration.INITIAL_TARGET_IDS,
+                        "scenarios": [
+                            _scenario_from_catalog(catalog, sid) for sid in orchestration.INITIAL_TARGET_IDS
+                        ],
+                    },
+                )
+            ],
+            "Scenarios generated.",
+            [("save_scenario_set", {})],  # v1: 4/5 (S04 MISSING) -> escalates, pauses
+            "Acknowledged.",
+            [("generate_missing_scenarios", {"target_ids": ["S04"], "scenarios": [invalid_s04]})],
+            "S04 regenerated (still invalid).",
+            [("save_scenario_set", {})],  # v2: 4/5 (S04 INVALID) -> escalates, pauses
+            "Noted; blocked.",
+        ]
+    )
+    monkeypatch.setattr(orchestration, "get_bedrock_model", lambda: model)
+    monkeypatch.setattr(
+        checkpoints,
+        "DeciderClient",
+        _mock_decider_client_factory(httpx.MockTransport(_coverage_always_escalates_handler)),
+    )
+
+    result = orchestration.run_initial_pass()
+    assert result["stage"] == "AWAITING_DECISION_CONFIRMATION"
+    run_id = result["run_id"]
+
+    after_remediation = orchestration.resume_pending_decision(run_id, "REMEDIATE_GAP")
+    assert after_remediation["stage"] == "AWAITING_DECISION_CONFIRMATION"
+
+    final = orchestration.resume_pending_decision(run_id, "REMEDIATE_GAP")
+    assert final["workflow_state"] == "BLOCKED"
+    controller = orchestration._ACTIVE_RUNS[run_id]["controller"]
+
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    s04 = catalog["scenarios"]["S04"]
+    assert s04["required_action_codes"][0] in prompt  # "DELIVER_DUPLICATE_SUCCESS_CALLBACK"
+    for assertion in s04["required_assertions"]:
+        assert assertion["observation"] in prompt
+
+    coverage_v2 = json.loads((controller.run_dir / "coverage_v2.json").read_text())
+    assert coverage_v2["scenario_set_version"] == 2
+    s04_row = next(r for r in coverage_v2["rows"] if r["scenario_id"] == "S04")
+    assert s04_row["status"] == "INVALID"
+    assert s04_row["findings"]  # non-empty -- a run must show WHY
+
+
 def test_run_initial_pass_full_happy_path_through_remediation_reaches_five_of_five(
     monkeypatch, tmp_path
 ):

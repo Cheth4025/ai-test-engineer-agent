@@ -237,6 +237,12 @@ def build_coverage_checkpoint(
             scenario_set["scenarios"], catalog, scenario_set_version=scenario_set["version"]
         )
         holder["scenario_set"], holder["coverage"] = scenario_set, coverage
+        # Persisted unconditionally, on every save_scenario_set scoring call
+        # -- AUTO or escalated, ACCEPT/REMEDIATE/BLOCKED -- never only on the
+        # first successful remediation. A run must show WHY a row was
+        # INVALID even when the outcome that follows is BLOCKED/REJECTED.
+        controller.save_evidence(f"scenarios_v{scenario_set['version']}.json", scenario_set)
+        controller.save_evidence(f"coverage_v{coverage['scenario_set_version']}.json", coverage)
         return scenario_set, coverage
 
     def build_questions(state: Any) -> dict:
@@ -345,10 +351,9 @@ def build_coverage_checkpoint(
             controller.save_evidence("coverage_accepted.json", coverage)
             return Proceed()
 
-        # REMEDIATE_GAP
+        # REMEDIATE_GAP -- scenarios_vN.json/coverage_vN.json are already
+        # persisted (see _compute()), on this and every other outcome alike.
         if controller.use_remediation():
-            controller.save_evidence(f"scenarios_v{coverage['scenario_set_version']}.json", scenario_set)
-            controller.save_evidence(f"coverage_v{coverage['scenario_set_version']}.json", coverage)
             missing = [r["scenario_id"] for r in coverage["rows"] if r["status"] != "VALID"]
             holder["remediation_feedback"] = remediation_feedback(missing, coverage)
             reason = (
@@ -645,13 +650,9 @@ def apply_human_decision(pending: dict, human_choice: str, controller: RunContro
             return "PROCEED", None
         if human_choice == "REMEDIATE_GAP":
             controller.record_decision(_decision_record_human(pending, human_choice, status="VALIDATED"))
+            # scenarios_vN.json/coverage_vN.json are already persisted (see
+            # build_coverage_checkpoint's _compute(), run at escalation time).
             if controller.use_remediation():
-                controller.save_evidence(
-                    f"scenarios_v{coverage['scenario_set_version']}.json", scenario_set
-                )
-                controller.save_evidence(
-                    f"coverage_v{coverage['scenario_set_version']}.json", coverage
-                )
                 missing = [r["scenario_id"] for r in coverage["rows"] if r["status"] != "VALID"]
                 feedback = remediation_feedback(missing, coverage)
                 controller.set_halt(f"REMEDIATION_SCHEDULED: {feedback}")

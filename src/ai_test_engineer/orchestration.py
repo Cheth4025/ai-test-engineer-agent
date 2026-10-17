@@ -128,21 +128,44 @@ def _interpretation_prompt(requirement_text: str, catalog: dict) -> str:
     )
 
 
-def _generation_prompt(target_ids: list[str], catalog: dict) -> str:
+def _grounding_prompt_block(target_ids: list[str], catalog: dict) -> str:
+    """The catalog grounding text shared by every generation/remediation
+    call: each target scenario's exact required_preconditions/
+    required_action_codes/required_assertions, so the model's output can be
+    checked against the same fixed oracle coverage.compute_coverage() uses.
+    A remediation call that skips this (as _drive_recheck's used to) is far
+    more likely to produce content the validator marks INVALID."""
     grounding = {scenario_id: catalog["scenarios"][scenario_id] for scenario_id in target_ids}
     return (
-        "Write the initial scenario set with Gherkin for exactly these "
-        f"scenario IDs: {target_ids}. Do not include S04 -- it is "
-        "deliberately omitted from this pass.\n\n"
         "For each scenario, preconditions must match required_preconditions, "
         "action_codes must match required_action_codes exactly, and "
         "expected_assertions must match required_assertions exactly (same "
         "observation/operator/expected values), all taken from this fixed "
         f"catalog grounding:\n\n{json.dumps(grounding, indent=2)}\n\n"
+    )
+
+
+def _generation_prompt(target_ids: list[str], catalog: dict) -> str:
+    return (
+        "Write the initial scenario set with Gherkin for exactly these "
+        f"scenario IDs: {target_ids}. Do not include S04 -- it is "
+        "deliberately omitted from this pass.\n\n"
+        f"{_grounding_prompt_block(target_ids, catalog)}"
         "Write a readable title, ordered human-readable actions, and "
         "Given/When/Then Gherkin for each -- these are review-only and are "
         "never executed. Call generate_scenarios exactly once with "
         f"target_ids={target_ids} and all {len(target_ids)} scenarios together."
+    )
+
+
+def _remediation_prompt(target_ids: list[str], catalog: dict, feedback: str) -> str:
+    return (
+        f"{feedback}\n\n"
+        f"{_grounding_prompt_block(target_ids, catalog)}"
+        "Write a readable title, ordered human-readable actions, and "
+        "Given/When/Then Gherkin for each -- these are review-only and are "
+        "never executed. Call generate_missing_scenarios exactly once with "
+        f"target_ids={target_ids} and all {len(target_ids)} scenario(s) together."
     )
 
 
@@ -248,7 +271,7 @@ def _drive_recheck(run_id: str, feedback: str) -> dict:
     run["agent"].tool_registry.process_tools([remediation_tool])  # new name -- no collision, no checkpoint
 
     controller.set_stage("REMEDIATING", STAGE_TOOLS["REMEDIATING"])
-    result = run["agent"](f"{feedback}\n\nCall generate_missing_scenarios with target_ids=['S04'] only.")
+    result = run["agent"](_remediation_prompt(["S04"], run["catalog"], feedback))
     run["last_result"] = result
     if result.stop_reason == "interrupt":
         # generate_missing_scenarios is ungated (not a checkpoints key) so this
