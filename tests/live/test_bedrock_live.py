@@ -1,5 +1,14 @@
 """Real-Bedrock smoke test for the Milestone 3 agent. Deselected by default.
 
+Superseded by tests/live/test_full_initial_pass_live.py (Milestone 4):
+run_initial_pass() now runs the Decider checkpoints and returns a different
+shape (no top-level "interpretation" key; coverage can land above 4/5 via
+AUTO remediation, or the run can pause before generate_scenarios ever
+completes). This test's assertions predate that and are no longer valid
+against the current return shape -- kept for history, skipped rather than
+rewritten since the new live test already covers this same real-Bedrock,
+real-Decider path end to end.
+
 Run manually (Decider server off, this test only):
     .venv/Scripts/python.exe -m pytest tests/live -v -m live -s -k bedrock
 """
@@ -13,6 +22,10 @@ from ai_test_engineer.orchestration import run_initial_pass
 pytestmark = pytest.mark.live
 
 
+@pytest.mark.skip(
+    reason="superseded by tests/live/test_full_initial_pass_live.py (Milestone 4); "
+    "see module docstring"
+)
 def test_live_run_initial_pass_extracts_six_rules_and_reports_4_of_5():
     result = run_initial_pass()
 

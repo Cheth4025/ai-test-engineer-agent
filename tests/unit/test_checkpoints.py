@@ -24,6 +24,7 @@ from ai_test_engineer.checkpoints import (
     full_coverage,
     grounding_items,
     remediation_feedback,
+    resolve_host_label,
 )
 from ai_test_engineer.state import RunController
 from ai_test_engineer.tools import AttemptLog
@@ -271,7 +272,7 @@ def test_escalate_sets_pending_decision_and_awaiting_stage(tmp_path):
     attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
     controller = RunController("test-run", tmp_path)
     holder: dict = {}
-    _, gate, checkpoints, on_decision, on_error = build_all(attempt_log, CATALOG, controller, DECIDER_CFG, holder)
+    _, gate, checkpoints, on_decision, on_error, _host_label = build_all(attempt_log, CATALOG, controller, DECIDER_CFG, holder)
     client = make_client(_escalate_handler)
 
     from decider_gate.intervention import DeciderGuardrail
@@ -293,7 +294,7 @@ def test_decisions_json_records_every_call(tmp_path):
     attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
     controller = RunController("test-run", tmp_path)
     holder: dict = {}
-    _, gate, checkpoints, on_decision, on_error = build_all(attempt_log, CATALOG, controller, DECIDER_CFG, holder)
+    _, gate, checkpoints, on_decision, on_error, _host_label = build_all(attempt_log, CATALOG, controller, DECIDER_CFG, holder)
 
     from decider_gate.intervention import DeciderGuardrail
 
@@ -318,7 +319,7 @@ def test_decider_error_sets_stopped(tmp_path):
     attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
     controller = RunController("test-run", tmp_path)
     holder: dict = {}
-    _, gate, checkpoints, on_decision, on_error = build_all(attempt_log, CATALOG, controller, DECIDER_CFG, holder)
+    _, gate, checkpoints, on_decision, on_error, _host_label = build_all(attempt_log, CATALOG, controller, DECIDER_CFG, holder)
 
     def handler(request):
         raise httpx.ConnectError("refused")
@@ -385,3 +386,101 @@ def test_human_request_clarification_pick_awaits_clarification(tmp_path):
     outcome, feedback = apply_human_decision(pending, "REQUEST_CLARIFICATION", controller)
 
     assert outcome == "AWAITING_CLARIFICATION"
+
+
+# -- STRATEGY state includes interpretation's ambiguities --------------------
+
+
+def test_generate_scenarios_build_state_includes_ambiguities_summary(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": ONE_RULE_INTERPRETATION["rules"],
+            "ambiguities": [
+                {"id": "A1", "rule_ids": ["BR01"], "question": "which gateway?", "critical": True, "status": "OPEN"}
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    state = checkpoint.build_state(None)
+
+    assert state["ambiguities"][0]["question"] == "which gateway?"
+
+
+def test_generate_scenarios_build_state_says_none_identified_when_no_ambiguities(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    state = checkpoint.build_state(None)
+
+    assert state["ambiguities"] == "none identified"
+
+
+def test_generate_scenarios_strategy_question_references_ambiguity_evidence(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": ONE_RULE_INTERPRETATION["rules"],
+            "ambiguities": [
+                {"id": "A1", "rule_ids": ["BR01"], "question": "which gateway?", "critical": True, "status": "OPEN"}
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "which gateway?" in questions["strategy_action"]["instructions"]
+
+
+# -- host label resolution -----------------------------------------------------
+
+
+def test_resolve_host_label_env_override(monkeypatch):
+    monkeypatch.setenv("AITE_DECIDER_HOST_LABEL", "ec2-g4dn-t4")
+
+    assert resolve_host_label({"host_label": "local-cpu"}) == "ec2-g4dn-t4"
+
+
+def test_resolve_host_label_falls_back_to_config_when_env_unset(monkeypatch):
+    monkeypatch.delenv("AITE_DECIDER_HOST_LABEL", raising=False)
+
+    assert resolve_host_label({"host_label": "local-cpu"}) == "local-cpu"
+
+
+def test_resolve_host_label_falls_back_to_config_when_env_empty(monkeypatch):
+    monkeypatch.setenv("AITE_DECIDER_HOST_LABEL", "")
+
+    assert resolve_host_label({"host_label": "local-cpu"}) == "local-cpu"
+
+
+def test_build_all_uses_resolved_host_label_in_decisions(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITE_DECIDER_HOST_LABEL", "ec2-g4dn-t4")
+    attempt_log = AttemptLog()
+    attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {}
+
+    _, gate, checkpoints, on_decision, on_error, host_label = build_all(
+        attempt_log, CATALOG, controller, DECIDER_CFG, holder
+    )
+
+    from decider_gate.intervention import DeciderGuardrail
+
+    assert host_label == "ec2-g4dn-t4"
+    guardrail = DeciderGuardrail(
+        client=make_client(_auto_handler), gate=gate, checkpoints=checkpoints, host_label=host_label,
+        on_decision=on_decision, on_error=on_error,
+    )
+    guardrail.before_tool_call(_make_event("generate_scenarios", {}))
+
+    assert controller.decisions[-1]["host_label"] == "ec2-g4dn-t4"

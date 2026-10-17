@@ -25,6 +25,7 @@ drives the actual regeneration itself via _drive_recheck.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from decider_gate.client import DeciderClient
@@ -93,8 +94,19 @@ def grounding_items(coverage: dict, verdicts: dict[str, Verdict]) -> list[dict]:
 
 
 def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: RunController) -> CheckpointSpec:
+    def _interpretation() -> dict:
+        return attempt_log.get_result("interpret_requirement")
+
     def _rules() -> list[dict]:
-        return attempt_log.get_result("interpret_requirement")["rules"]
+        return _interpretation()["rules"]
+
+    def _ambiguity_summary() -> str:
+        ambiguities = _interpretation()["ambiguities"]
+        if not ambiguities:
+            return "none identified"
+        return "; ".join(
+            f"{a['id']} (critical={a['critical']}): {a['question']}" for a in ambiguities
+        )
 
     def build_questions(state: Any) -> dict:
         questions = {
@@ -120,29 +132,31 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
         questions["strategy_action"] = {
             "type": "choice",
             "instructions": (
-                "Given the rules and any flagged ambiguities, should the agent generate "
-                "the scenario set now, or request human clarification first?"
+                f"Interpretation's recorded ambiguities: {_ambiguity_summary()}. Given the rules "
+                "and these ambiguities, should the agent generate the scenario set now, or "
+                "request human clarification first?"
             ),
             "criteria": {
                 "GENERATE_TESTS": (
-                    "The six business rules are clear enough to generate scenarios now; "
-                    "no outstanding ambiguity would change what a test must assert."
+                    "Interpretation identified no critical ambiguity and every rule BR01-BR06 "
+                    "states a concrete, testable outcome; generate scenarios now."
                 ),
                 "REQUEST_CLARIFICATION": (
-                    "At least one rule leaves a genuine ambiguity that would change what "
-                    "a test must assert; stop and ask a human to resolve it before "
-                    "generating scenarios."
+                    "Interpretation lists at least one critical ambiguity, or a rule's expected "
+                    "outcome cannot be asserted without a human answer."
                 ),
             },
         }
         return questions
 
     def build_state(state: Any) -> dict:
+        interpretation = _interpretation()
         return {
             "rules": [
                 {"rule_id": r["rule_id"], "source_excerpt": r["source_excerpt"], "meaning": r["meaning"]}
                 for r in _rules()
-            ]
+            ],
+            "ambiguities": interpretation["ambiguities"] or "none identified",
         }
 
     def resolve(verdicts: dict[str, Verdict]) -> Proceed | Deny:
@@ -334,12 +348,21 @@ def _checkpoint_name(tool_name: str) -> str:
     }.get(tool_name, tool_name)
 
 
+def resolve_host_label(decider_cfg: dict) -> str:
+    """AITE_DECIDER_HOST_LABEL env var wins when set and non-empty; otherwise
+    falls back to config/decider.json's host_label. Lets the same config file
+    serve a local-cpu dev run and an EC2 GPU run (AITE_DECIDER_HOST_LABEL=ec2-g4dn-t4)
+    without editing the file."""
+    return os.environ.get("AITE_DECIDER_HOST_LABEL") or decider_cfg["host_label"]
+
+
 def _decision_record(
     tool_name: str,
     verdicts: dict[str, Verdict],
     action: Any,
     controller: RunController,
     decider_cfg: dict,
+    host_label: str,
 ) -> dict:
     escalated = [v for v in verdicts.values() if v.route == "ESCALATE"]
     primary = escalated[0] if escalated else next(iter(verdicts.values()), None)
@@ -355,7 +378,7 @@ def _decision_record(
         "route": "ESCALATED" if escalated else "AUTO",
         "decision_source": "DECIDER",
         "latency_ms": primary.latency_ms if primary else None,
-        "host_label": primary.host_label if primary else decider_cfg.get("host_label"),
+        "host_label": primary.host_label if primary else host_label,
         "model_revision": primary.model if primary else decider_cfg.get("model"),
         "rationale": f"{tool_name} verdicts: " + ", ".join(f"{n}={v.route}" for n, v in verdicts.items()),
         "rationale_origin": "CONTROLLER_EVIDENCE",
@@ -396,6 +419,7 @@ def _decision_record_human(
 def build_all(
     attempt_log: AttemptLog, catalog: dict, controller: RunController, decider_cfg: dict, holder: dict
 ):
+    host_label = resolve_host_label(decider_cfg)
     client = DeciderClient(
         url=decider_cfg["url"],
         timeout_s=decider_cfg["timeouts"]["call_s_cpu"],
@@ -412,7 +436,9 @@ def build_all(
     }
 
     def on_decision(tool_name: str, verdicts: dict[str, Verdict], action: Any) -> None:
-        controller.record_decision(_decision_record(tool_name, verdicts, action, controller, decider_cfg))
+        controller.record_decision(
+            _decision_record(tool_name, verdicts, action, controller, decider_cfg, host_label)
+        )
         if isinstance(action, Confirm):
             pending_ctx = dict(holder) if tool_name == "save_scenario_set" else {}
             controller.set_pending_decision(
@@ -427,10 +453,12 @@ def build_all(
             )
 
     def on_error(tool_name: str, exc: Exception) -> None:
-        controller.save_evidence("decider_error.json", {"tool_name": tool_name, "error": str(exc)})
+        controller.save_evidence(
+            "decider_error.json", {"tool_name": tool_name, "error": str(exc), "host_label": host_label}
+        )
         controller.set_workflow_state("STOPPED", stage="STOPPED", busy=False)
 
-    return client, gate, checkpoints, on_decision, on_error
+    return client, gate, checkpoints, on_decision, on_error, host_label
 
 
 def apply_human_decision(pending: dict, human_choice: str, controller: RunController) -> tuple[str, str | None]:

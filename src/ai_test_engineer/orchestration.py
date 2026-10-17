@@ -180,14 +180,14 @@ def run_initial_pass() -> dict:
     interpret_requirement = build_interpret_requirement_tool(attempt_log, requirement_text)
     generate_scenarios = build_generate_scenarios_tool(attempt_log, INITIAL_TARGET_IDS)
     save_scenario_set = build_save_scenario_set_tool(attempt_log, catalog)
-    client, gate, checkpoints, on_decision, on_error = build_all(
+    client, gate, checkpoints, on_decision, on_error, host_label = build_all(
         attempt_log, catalog, controller, decider_cfg, holder
     )
     guardrail = DeciderGuardrail(
         client=client,
         gate=gate,
         checkpoints=checkpoints,
-        host_label=decider_cfg["host_label"],
+        host_label=host_label,
         on_decision=on_decision,
         on_error=on_error,
     )
