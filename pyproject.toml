@@ -10,7 +10,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=9"]
+dev = [
+    "botocore[crt]>=1.43.114",
+    "pytest>=9",
+]
 
 [build-system]
 requires = ["hatchling"]
