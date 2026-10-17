@@ -36,6 +36,11 @@ def _print_decisions(controller) -> None:
             f"host_label={record['host_label']} model={record['model_revision']} "
             f"decision_source={record['decision_source']} decision_status={record['decision_status']}"
         )
+        for q in record.get("per_question", []):
+            print(
+                f"      - {q['question']}: answer={q['answer']!r} suggestion={q['suggestion']!r} "
+                f"confidence={q['confidence']} route={q['route']} probabilities={q['probabilities']!r}"
+            )
 
 
 def _options_for(tool_name: str) -> list[str]:
@@ -50,8 +55,12 @@ def _ask_human(pending: dict) -> str:
     print("\n=== AWAITING_DECISION_CONFIRMATION ===")
     print(f"checkpoint tool: {pending['tool_name']}")
     print("Decider's per-question suggestions:")
-    for name, suggestion in pending["verdicts"].items():
-        print(f"  {name}: {suggestion!r}")
+    for name, fields in pending["verdicts"].items():
+        print(
+            f"  {name}: answer={fields['answer']!r} suggestion={fields['suggestion']!r} "
+            f"confidence={fields['confidence']} route={fields['route']} "
+            f"probabilities={fields['probabilities']!r}"
+        )
     context = pending.get("context") or {}
     if "coverage" in context:
         coverage = context["coverage"]
@@ -87,15 +96,18 @@ def main() -> None:
     print(f"\nrun_id: {run_id}")
     print(f"final workflow_state: {result.get('workflow_state')}  stage: {result.get('stage')}")
 
-    before_path = run_dir / "coverage_v1.json"
-    if before_path.exists():
-        before = json.loads(before_path.read_text())
-        print(
-            f"coverage BEFORE remediation: {before['covered']}/{before['required']} "
-            f"({before['percentage']}%)"
-        )
-    else:
+    if not controller.remediation_used:
         print("coverage BEFORE remediation: n/a (remediation was never scheduled on this run)")
+    else:
+        before_path = run_dir / "coverage_v1.json"
+        if before_path.exists():
+            before = json.loads(before_path.read_text())
+            print(
+                f"coverage BEFORE remediation: {before['covered']}/{before['required']} "
+                f"({before['percentage']}%)"
+            )
+        else:
+            print("coverage BEFORE remediation: remediation was scheduled but coverage_v1.json is missing")
 
     if "coverage" in result:
         coverage = result["coverage"]

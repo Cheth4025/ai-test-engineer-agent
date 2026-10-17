@@ -51,6 +51,8 @@ class RunController:
         self._remediation_used = False
         self._execution_started = False
         self._investigation_used = False
+        self._halted = False
+        self._halt_reason: str | None = None
         self.pending_decision: dict | None = None
         self.decisions: list[dict] = []
         self._save_state()
@@ -89,6 +91,33 @@ class RunController:
     @property
     def investigation_used(self) -> bool:
         return self._investigation_used
+
+    # -- controller halt: deny every tool call until cleared -----------------
+    #
+    # Set the instant a decision schedules remediation/clarification/block, so
+    # a model that keeps acting within the same agent() turn (before the
+    # orchestration code driving that decision regains control) is denied
+    # without ever reaching Decider again. _drive_recheck clears it to start
+    # the fresh turn remediation runs in. Checked by checkpoints.HaltGuard,
+    # registered ahead of DeciderGuardrail in the Agent's interventions list.
+
+    def set_halt(self, reason: str) -> None:
+        self._halted = True
+        self._halt_reason = reason
+        self._save_state()
+
+    def clear_halt(self) -> None:
+        self._halted = False
+        self._halt_reason = None
+        self._save_state()
+
+    @property
+    def halted(self) -> bool:
+        return self._halted
+
+    @property
+    def halt_reason(self) -> str | None:
+        return self._halt_reason
 
     # -- state transitions / audit -------------------------------------------
 
@@ -130,6 +159,8 @@ class RunController:
                         "investigation_used": self._investigation_used,
                     },
                     "pending_decision": self.pending_decision,
+                    "halted": self._halted,
+                    "halt_reason": self._halt_reason,
                 },
                 indent=2,
             )

@@ -9,6 +9,15 @@ business rules. The per-tool question builder and the AUTO-path resolver
 (Proceed/Guide/Deny) are supplied by the caller via CheckpointSpec. The
 ESCALATE path is always handled generically here (Confirm), regardless of
 domain -- confidence routes a decision, it never decides one.
+
+Resume replay: Strands re-runs before_tool_call for the SAME toolUseId when a
+paused run resumes (the interrupted tool call is replayed, not skipped -- see
+strands.event_loop.event_loop._handle_tool_execution). Once a toolUseId has
+escalated once, DeciderGuardrail remembers it (_escalated) and on the next
+call for that id resolves straight from the tool's own BeforeToolCallEvent.
+interrupt() -- which strands has already recorded the human's answer against,
+keyed by this exact (toolUseId, handler name) pair -- instead of asking
+Decider again or firing on_decision a second time.
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ from typing import Any
 
 from strands.hooks.events import BeforeToolCallEvent
 from strands.interventions import Confirm, Deny, Guide, InterventionHandler, Proceed
+from strands.interventions.actions import default_evaluate
 
 from decider_gate.client import DeciderClient, DeciderError
 from decider_gate.gate import ConfidenceGate, Verdict
@@ -71,6 +81,7 @@ class DeciderGuardrail(InterventionHandler):
         self._on_decision = on_decision
         self._on_error = on_error
         self._name = name
+        self._escalated: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -83,6 +94,14 @@ class DeciderGuardrail(InterventionHandler):
         spec = self._checkpoints.get(tool_name)
         if spec is None:
             return Proceed()
+
+        tool_use_id = event.tool_use.get("toolUseId")
+        if tool_use_id in self._escalated:
+            self._escalated.discard(tool_use_id)
+            response = event.interrupt(self._name, reason="replay after human resume")
+            return Proceed() if default_evaluate(response) else Deny(
+                reason=f"DENIED: human rejected the escalated {tool_name} decision"
+            )
 
         state = event.tool_use.get("input")
 
@@ -112,6 +131,8 @@ class DeciderGuardrail(InterventionHandler):
 
         if any(verdict.route == "ESCALATE" for verdict in verdicts.values()):
             action = Confirm(prompt=self._build_confirm_prompt(verdicts))
+            if tool_use_id is not None:
+                self._escalated.add(tool_use_id)
         else:
             action = spec.resolve(verdicts)
 

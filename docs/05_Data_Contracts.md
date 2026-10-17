@@ -364,6 +364,7 @@ Application request; the adapter converts it to the native `/v1/systemone` body 
 | decision_status | `string` | Required | VALIDATED or REJECTED, assigned by controller |
 | native_response_ref | `string` | Required | Saved raw response/error file |
 | rejection_reason | `string` | Conditional | Required for REJECTED |
+| per_question | `array<object>` | Required | One entry per question this checkpoint asked -- `{question, answer, suggestion, confidence, probabilities, route}` -- so a multi-question checkpoint's full audit survives, not just its primary verdict |
 
 Confidence routes a decision; it never overrides a controller guard. A human pick after escalation is guarded the same way (e.g. ACCEPT_COVERAGE at 4/5 is still rejected). Unknown/malformed/stale selections stop the run; no hardcoded fallback.
 

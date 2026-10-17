@@ -28,7 +28,7 @@ from decider_gate.intervention import DeciderGuardrail
 from strands import Agent
 
 from ai_test_engineer.bedrock import get_bedrock_model
-from ai_test_engineer.checkpoints import apply_human_decision, build_all
+from ai_test_engineer.checkpoints import HaltGuard, apply_human_decision, build_all
 from ai_test_engineer.coverage import compute_coverage
 from ai_test_engineer.state import RunController
 from ai_test_engineer.tools import (
@@ -63,9 +63,24 @@ def _interpretation_prompt(requirement_text: str) -> str:
         "Extract exactly six business rules, BR01 through BR06, one per rule "
         "stated in the text above. For each rule, supply rule_id, a "
         "source_excerpt that is an exact, literal substring of the text "
-        "above, a meaning, and expected_observations. Record any ambiguities "
-        "you find (there may be none). Call interpret_requirement exactly "
-        "once with all six rules together."
+        "above, a meaning, and expected_observations. Record every "
+        "ambiguity you find (there may be none) -- never suppress one "
+        "because it looks out of scope; scope only controls its `critical` "
+        "flag, decided as follows.\n\n"
+        "Scope for `critical`: this is a synthetic test specification "
+        "covering exactly five fixed scenarios, S01 through S05 (tests T01 "
+        "through T05), each run against deterministic fixtures -- "
+        "\"scripted\" means the fixture's deterministic script, nothing "
+        "live or production. Mark an ambiguity critical ONLY if resolving "
+        "it would change what one of S01-S05/T01-T05 must assert -- e.g. "
+        "which exact condition, value, branch, or outcome one of those five "
+        "scenarios needs to check. An ambiguity about a topic that cannot "
+        "change any of S01-S05's assertions is NOT critical, even if it is "
+        "a real open question -- e.g. key generation ownership, TTLs, and "
+        "non-amount payload fields are out of scope for this fixed scenario "
+        "set, so record them as non-critical ambiguities rather than "
+        "omitting them. Call interpret_requirement exactly once with all "
+        "six rules together."
     )
 
 
@@ -129,6 +144,8 @@ def _drive_recheck(run_id: str, feedback: str) -> dict:
     tested implementation for both.
     """
     run = _ACTIVE_RUNS[run_id]
+    controller: RunController = run["controller"]
+    controller.clear_halt()  # fresh turn: lift the halt the triggering decision set
     attempt_log: AttemptLog = run["attempt_log"]
     v1 = attempt_log.get_result("generate_scenarios")
 
@@ -157,7 +174,6 @@ def _drive_recheck(run_id: str, feedback: str) -> dict:
 
     result = run["agent"]("Call save_scenario_set again to recheck coverage after remediation.")
     run["last_result"] = result
-    controller: RunController = run["controller"]
     if result.stop_reason == "interrupt":
         return _paused(run_id, controller)
     if controller.workflow_state == "BLOCKED":  # second gap
@@ -195,7 +211,9 @@ def run_initial_pass() -> dict:
     agent = Agent(
         model=get_bedrock_model(),
         tools=[interpret_requirement, generate_scenarios, save_scenario_set],
-        interventions=[guardrail],
+        # HaltGuard ahead of guardrail: registration order is dispatch order,
+        # and its Deny short-circuits the rest -- see checkpoints.HaltGuard.
+        interventions=[HaltGuard(controller), guardrail],
         # Strands' default callback handler prints raw model/tool-call deltas
         # to stdout and can crash on non-UTF-8 consoles (observed: a '→'
         # the model emitted raised UnicodeEncodeError on cp1252 Windows).

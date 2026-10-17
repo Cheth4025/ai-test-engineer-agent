@@ -31,7 +31,7 @@ from typing import Any
 from decider_gate.client import DeciderClient
 from decider_gate.gate import ConfidenceGate, Verdict
 from decider_gate.intervention import CheckpointSpec
-from strands.interventions import Confirm, Deny, Proceed
+from strands.interventions import Confirm, Deny, InterventionHandler, Proceed
 
 from ai_test_engineer.coverage import compute_coverage
 from ai_test_engineer.state import RunController
@@ -166,12 +166,12 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
             controller.set_workflow_state(
                 "AWAITING_CLARIFICATION", stage="AWAITING_CLARIFICATION", busy=False
             )
-            return Deny(
-                reason=(
-                    f"AWAITING_CLARIFICATION: flagged={flagged}, strategy={strategy}; "
-                    "do not call further tools"
-                )
+            reason = (
+                f"AWAITING_CLARIFICATION: flagged={flagged}, strategy={strategy}; "
+                "do not call further tools"
             )
+            controller.set_halt(reason)
+            return Deny(reason=reason)
         return Proceed()
 
     return CheckpointSpec(build_questions=build_questions, resolve=resolve, build_state=build_state)
@@ -219,13 +219,19 @@ def build_coverage_checkpoint(
                 f"{a['observation']} {a['operator']} {a['expected']!r}"
                 for a in scenario["expected_assertions"]
             )
+            # Self-contained by design: this scenario's own Gherkin + oracle +
+            # linked rule text are embedded directly in ITS instructions,
+            # never left to the shared COVERAGE state alone -- a spike found
+            # single-scenario grounding scored 0.88 on a correct S04 vs ~0.77
+            # relying on shared state (see module docstring / review notes).
             questions[f"grounding_{row['scenario_id']}"] = {
                 "type": "noul",
                 "instructions": (
                     f"{row['scenario_id']} ('{scenario['title']}') is linked to rule(s): "
-                    f"{rule_meanings}. Its structured oracle requires: {assertions}. Does "
-                    f"{row['scenario_id']}'s Given/When/Then explicitly assert this same "
-                    "outcome -- no weaker, missing, or additional claim?"
+                    f"{rule_meanings}. Its structured oracle requires: {assertions}. Its "
+                    f"Given/When/Then Gherkin is:\n{scenario['gherkin']}\n\n"
+                    f"Does {row['scenario_id']}'s Given/When/Then above explicitly assert "
+                    "this same outcome -- no weaker, missing, or additional claim?"
                 ),
                 "criteria": {
                     "true": (
@@ -261,40 +267,24 @@ def build_coverage_checkpoint(
         return questions
 
     def build_state(state: Any) -> dict:
-        scenario_set, coverage = holder["scenario_set"], holder["coverage"]
-        interpretation = attempt_log.get_result("interpret_requirement")
-        rules_by_id = {r["rule_id"]: r for r in interpretation["rules"]}
-        scenarios_by_id = {s["scenario_id"]: s for s in scenario_set["scenarios"]}
-
-        per_scenario = []
-        for row in coverage["rows"]:
-            scenario = scenarios_by_id.get(row["scenario_id"])
-            per_scenario.append(
-                {
-                    "scenario_id": row["scenario_id"],
-                    "status": row["status"],
-                    "rule_ids": row["rule_ids"],
-                    "rules": [
-                        {"rule_id": rid, "meaning": rules_by_id[rid]["meaning"]}
-                        for rid in row["rule_ids"]
-                        if rid in rules_by_id
-                    ],
-                    "preconditions": scenario["preconditions"] if scenario else None,
-                    "action_codes": scenario["action_codes"] if scenario else None,
-                    "expected_assertions": scenario["expected_assertions"] if scenario else None,
-                    "gherkin": scenario["gherkin"] if scenario else None,
-                }
-            )
+        """Shared COVERAGE state carries ONLY the validator matrix -- status
+        per S01-S05, covered/required, missing IDs + rules. Each grounding
+        noul's own instructions (see build_questions above) already carry
+        that scenario's full Gherkin/oracle/rule text; duplicating it here
+        in a shared blob measured worse (see build_questions' comment)."""
+        coverage = holder["coverage"]
         missing = [
             {"scenario_id": r["scenario_id"], "rule_ids": r["rule_ids"]}
             for r in coverage["rows"]
             if r["status"] != "VALID"
         ]
         return {
-            "scenarios": per_scenario,
             "validator_matrix": {
                 "covered": coverage["covered"],
                 "required": coverage["required"],
+                "rows": [
+                    {"scenario_id": r["scenario_id"], "status": r["status"]} for r in coverage["rows"]
+                ],
                 "missing": missing,
             },
         }
@@ -323,17 +313,46 @@ def build_coverage_checkpoint(
             controller.save_evidence(f"coverage_v{coverage['scenario_set_version']}.json", coverage)
             missing = [r["scenario_id"] for r in coverage["rows"] if r["status"] != "VALID"]
             holder["remediation_feedback"] = remediation_feedback(missing, coverage)
-            # Deny, never Guide: see module docstring for why.
-            return Deny(
-                reason=(
-                    "REMEDIATION_SCHEDULED: do not call further tools; "
-                    "the controller will start remediation"
-                )
+            reason = (
+                "REMEDIATION_SCHEDULED: do not call further tools; "
+                "the controller will start remediation"
             )
+            controller.set_halt(reason)
+            # Deny, never Guide: see module docstring for why.
+            return Deny(reason=reason)
         controller.set_workflow_state("BLOCKED", stage="BLOCKED", busy=False)
-        return Deny(reason="REMEDIATE_GAP requested a second time in this run; BLOCKED.")
+        reason = "REMEDIATE_GAP requested a second time in this run; BLOCKED."
+        controller.set_halt(reason)
+        return Deny(reason=reason)
 
     return CheckpointSpec(build_questions=build_questions, resolve=resolve, build_state=build_state)
+
+
+class HaltGuard(InterventionHandler):
+    """Registered ahead of DeciderGuardrail: denies every tool call while
+    controller.halted, without ever reaching Decider.
+
+    Strands keeps running the model within the same agent() turn after a tool
+    call is denied (the model sees the error and may just retry); without
+    this, a model that retries generate_scenarios/save_scenario_set after a
+    decision already scheduled remediation/clarification/block gets a fresh
+    Decider call and can consume the single-use remediation flag a second
+    time before orchestration._drive_recheck ever runs. This handler makes
+    that retry a no-op Deny instead.
+    """
+
+    def __init__(self, controller: RunController, name: str = "controller-halt") -> None:
+        self._controller = controller
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def before_tool_call(self, event: Any, **kwargs: Any) -> Proceed | Deny:
+        if self._controller.halted:
+            return Deny(reason=self._controller.halt_reason or "HALTED: do not call further tools")
+        return Proceed()
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +373,31 @@ def resolve_host_label(decider_cfg: dict) -> str:
     serve a local-cpu dev run and an EC2 GPU run (AITE_DECIDER_HOST_LABEL=ec2-g4dn-t4)
     without editing the file."""
     return os.environ.get("AITE_DECIDER_HOST_LABEL") or decider_cfg["host_label"]
+
+
+def _per_question_from_verdicts(verdicts: dict[str, Verdict]) -> list[dict]:
+    """Full per-question audit: every question's answer/suggestion/confidence/
+    route/probabilities, not just the primary (first-escalated-or-first)
+    verdict _decision_record's other fields summarize."""
+    return [
+        {
+            "question": name,
+            "answer": v.answer,
+            "suggestion": v.suggestion,
+            "confidence": v.confidence,
+            "probabilities": v.probabilities,
+            "route": v.route,
+        }
+        for name, v in verdicts.items()
+    ]
+
+
+def _per_question_from_pending(pending_verdicts: dict[str, dict]) -> list[dict]:
+    """Same shape as _per_question_from_verdicts, built from the richer
+    per-question dicts on_decision stores on controller.pending_decision
+    (captured at escalation time, since Verdict objects themselves are not
+    JSON-serializable and do not survive a pause)."""
+    return [{"question": name, **fields} for name, fields in pending_verdicts.items()]
 
 
 def _decision_record(
@@ -386,6 +430,7 @@ def _decision_record(
         "decision_status": "VALIDATED",
         "native_response_ref": None,
         "rejection_reason": None,
+        "per_question": _per_question_from_verdicts(verdicts),
     }
 
 
@@ -393,12 +438,12 @@ def _decision_record_human(
     pending: dict, human_choice: str, *, status: str, rejection_reason: str | None = None
 ) -> dict:
     tool_name = pending["tool_name"]
-    verdict_suggestions = pending.get("verdicts", {})
+    per_question_fields = pending.get("verdicts", {})
     return {
         "checkpoint": _checkpoint_name(tool_name),
         "workflow_state": None,
         "selected_action": human_choice,
-        "decider_suggestion": verdict_suggestions,
+        "decider_suggestion": {name: fields["suggestion"] for name, fields in per_question_fields.items()},
         "confidence": None,
         "option_probabilities": None,
         "threshold": None,
@@ -413,6 +458,7 @@ def _decision_record_human(
         "decision_status": status,
         "native_response_ref": None,
         "rejection_reason": rejection_reason,
+        "per_question": _per_question_from_pending(per_question_fields),
     }
 
 
@@ -445,7 +491,16 @@ def build_all(
                 {
                     "tool_name": tool_name,
                     "context": pending_ctx,
-                    "verdicts": {name: v.suggestion for name, v in verdicts.items()},
+                    "verdicts": {
+                        name: {
+                            "answer": v.answer,
+                            "suggestion": v.suggestion,
+                            "confidence": v.confidence,
+                            "probabilities": v.probabilities,
+                            "route": v.route,
+                        }
+                        for name, v in verdicts.items()
+                    },
                 }
             )
             controller.set_workflow_state(
@@ -489,8 +544,15 @@ def apply_human_decision(pending: dict, human_choice: str, controller: RunContro
                 controller.save_evidence(
                     f"scenarios_v{coverage['scenario_set_version']}.json", scenario_set
                 )
+                controller.save_evidence(
+                    f"coverage_v{coverage['scenario_set_version']}.json", coverage
+                )
                 missing = [r["scenario_id"] for r in coverage["rows"] if r["status"] != "VALID"]
-                return "REMEDIATION_SCHEDULED", remediation_feedback(missing, coverage)
+                feedback = remediation_feedback(missing, coverage)
+                controller.set_halt(f"REMEDIATION_SCHEDULED: {feedback}")
+                return "REMEDIATION_SCHEDULED", feedback
+            controller.set_workflow_state("BLOCKED", stage="BLOCKED", busy=False)
+            controller.set_halt("REMEDIATE_GAP requested a second time in this run; BLOCKED.")
             return "BLOCKED", None
         raise ValueError(f"unrecognized human_choice {human_choice!r} for save_scenario_set")
     if tool_name == "generate_scenarios":
@@ -498,6 +560,10 @@ def apply_human_decision(pending: dict, human_choice: str, controller: RunContro
         if human_choice == "GENERATE_TESTS":
             return "PROCEED", None
         if human_choice == "REQUEST_CLARIFICATION":
+            controller.set_workflow_state(
+                "AWAITING_CLARIFICATION", stage="AWAITING_CLARIFICATION", busy=False
+            )
+            controller.set_halt("AWAITING_CLARIFICATION: do not call further tools")
             return "AWAITING_CLARIFICATION", None
         raise ValueError(f"unrecognized human_choice {human_choice!r} for generate_scenarios")
     raise ValueError(f"unrecognized pending tool {tool_name!r}")

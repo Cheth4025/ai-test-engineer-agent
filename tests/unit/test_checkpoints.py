@@ -17,6 +17,7 @@ from strands.hooks.events import BeforeToolCallEvent
 from strands.interventions import Confirm, Deny, Proceed
 
 from ai_test_engineer.checkpoints import (
+    HaltGuard,
     apply_human_decision,
     build_all,
     build_coverage_checkpoint,
@@ -90,6 +91,17 @@ def _choice_verdict(question: str, choice: str, confidence: float = 0.9) -> Verd
         host_label="local-cpu",
         model="m",
     )
+
+
+def _pending_verdict_fields(suggestion: str, confidence: float = 0.5, route: str = "ESCALATE") -> dict:
+    """Shape on_decision stores per-question on controller.pending_decision["verdicts"]."""
+    return {
+        "answer": suggestion if route == "AUTO" else None,
+        "suggestion": suggestion,
+        "confidence": confidence,
+        "probabilities": {suggestion: confidence},
+        "route": route,
+    }
 
 
 def _noul_verdict(question: str, answer: bool, confidence: float = 0.9) -> Verdict:
@@ -186,6 +198,7 @@ def test_coverage_resolve_first_remediate_sets_holder_flag_and_denies(tmp_path):
         "exactly one ledger posting; keep S01-S03, S05 unchanged"
     )
     assert controller.remediation_used is True
+    assert controller.halted is True  # denies any further tool call this turn, before _drive_recheck
 
 
 def test_coverage_resolve_second_remediate_denies_and_blocks(tmp_path):
@@ -198,6 +211,7 @@ def test_coverage_resolve_second_remediate_denies_and_blocks(tmp_path):
 
     assert isinstance(action, Deny)
     assert controller.workflow_state == "BLOCKED"
+    assert controller.halted is True
     assert holder["remediation_feedback"] is None  # reset at top of resolve(), never left stale
 
 
@@ -209,6 +223,31 @@ def test_coverage_resolve_accepts_at_5_of_5(tmp_path):
 
     assert isinstance(action, Proceed)
     assert (controller.run_dir / "scenarios_accepted.json").exists()
+
+
+# -- grounding nouls are self-contained; shared state is validator-matrix-only -
+
+
+def test_grounding_question_embeds_its_own_gherkin_and_oracle(tmp_path):
+    checkpoint, controller, holder = _setup_coverage_checkpoint(tmp_path, ["S01", "S02", "S03", "S05"])
+
+    questions = checkpoint.build_questions(None)
+    state = checkpoint.build_state(None)
+
+    instructions = questions["grounding_S01"]["instructions"]
+    assert _valid_scenario("S01")["gherkin"] in instructions
+    assert "obs EQ 1" in instructions
+    assert "meaning of BR01" in instructions
+    # The shared state no longer duplicates any scenario's Gherkin/oracle --
+    # only the validator matrix (status per scenario, covered/required, missing).
+    assert "scenarios" not in state
+    assert state["validator_matrix"]["rows"] == [
+        {"scenario_id": "S01", "status": "VALID"},
+        {"scenario_id": "S02", "status": "VALID"},
+        {"scenario_id": "S03", "status": "VALID"},
+        {"scenario_id": "S04", "status": "MISSING"},
+        {"scenario_id": "S05", "status": "VALID"},
+    ]
 
 
 # -- grounding never promotes an invalid row ---------------------------------
@@ -229,6 +268,38 @@ def test_grounding_never_promotes_invalid_row():
     assert full_coverage(coverage) is False  # ...but never feeds into the coverage guard itself
 
 
+# -- HaltGuard: deny every tool call while halted, never reaching Decider ----
+
+
+def test_halt_guard_proceeds_when_not_halted(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    guard = HaltGuard(controller)
+
+    action = guard.before_tool_call(_make_event("save_scenario_set", {}))
+
+    assert isinstance(action, Proceed)
+
+
+def test_halt_guard_denies_with_halt_reason_once_halted(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    controller.set_halt("REMEDIATION_SCHEDULED: do not call further tools")
+
+    action = HaltGuard(controller).before_tool_call(_make_event("save_scenario_set", {}))
+
+    assert isinstance(action, Deny)
+    assert action.reason == "REMEDIATION_SCHEDULED: do not call further tools"
+
+
+def test_halt_guard_clears_and_proceeds_again(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    controller.set_halt("blocked for now")
+    controller.clear_halt()
+
+    action = HaltGuard(controller).before_tool_call(_make_event("save_scenario_set", {}))
+
+    assert isinstance(action, Proceed)
+
+
 # -- generate_scenarios checkpoint resolve() ----------------------------------
 
 
@@ -246,6 +317,7 @@ def test_generate_scenarios_resolve_sets_awaiting_clarification_on_flagged_ambig
 
     assert isinstance(action, Deny)
     assert controller.workflow_state == "AWAITING_CLARIFICATION"
+    assert controller.halted is True
 
 
 def test_generate_scenarios_resolve_proceeds_when_clear(tmp_path):
@@ -262,6 +334,7 @@ def test_generate_scenarios_resolve_proceeds_when_clear(tmp_path):
 
     assert isinstance(action, Proceed)
     assert controller.workflow_state == "PREPARING"
+    assert controller.halted is False
 
 
 # -- escalation / on_decision / on_error, via the real DeciderGuardrail ------
@@ -287,6 +360,13 @@ def test_escalate_sets_pending_decision_and_awaiting_stage(tmp_path):
     assert controller.pending_decision is not None
     assert controller.pending_decision["tool_name"] == "generate_scenarios"
     assert controller.stage == "AWAITING_DECISION_CONFIRMATION"
+    # on_decision keeps every question's full verdict, not just its suggestion,
+    # so a later human pick can produce a complete per_question audit record.
+    stored = controller.pending_decision["verdicts"]
+    for fields in stored.values():
+        assert set(fields) == {"answer", "suggestion", "confidence", "probabilities", "route"}
+    assert controller.decisions[-1]["per_question"]
+    assert {q["question"] for q in controller.decisions[-1]["per_question"]} == set(stored)
 
 
 def test_decisions_json_records_every_call(tmp_path):
@@ -345,7 +425,7 @@ def test_human_rejected_pick_keeps_decision_open(tmp_path):
     pending = {
         "tool_name": "save_scenario_set",
         "context": {"coverage": holder["coverage"], "scenario_set": holder["scenario_set"]},
-        "verdicts": {"coverage_action": "ACCEPT_COVERAGE"},
+        "verdicts": {"coverage_action": _pending_verdict_fields("ACCEPT_COVERAGE")},
     }
     controller.set_pending_decision(pending)
 
@@ -354,6 +434,9 @@ def test_human_rejected_pick_keeps_decision_open(tmp_path):
     assert outcome == "REJECTED_RETRY"
     assert feedback is None
     assert controller.decisions[-1]["decision_status"] == "REJECTED"
+    assert controller.decisions[-1]["per_question"] == [
+        {"question": "coverage_action", **_pending_verdict_fields("ACCEPT_COVERAGE")}
+    ]
     # apply_human_decision never touches pending_decision itself -- that is
     # orchestration.resume_pending_decision's job, specifically so a rejected
     # pick never strands the run.
@@ -364,28 +447,41 @@ def test_human_rejected_pick_keeps_decision_open(tmp_path):
     assert outcome2 == "REMEDIATION_SCHEDULED"
     assert "S04" in feedback2
     assert controller.remediation_used is True
+    assert controller.halted is True
+    assert (controller.run_dir / "coverage_v1.json").exists()  # parity with the AUTO resolve() path
 
 
 def test_human_generate_tests_pick_proceeds(tmp_path):
     attempt_log = AttemptLog()
     attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
     controller = RunController("test-run", tmp_path)
-    pending = {"tool_name": "generate_scenarios", "context": {}, "verdicts": {"strategy_action": "GENERATE_TESTS"}}
+    pending = {
+        "tool_name": "generate_scenarios",
+        "context": {},
+        "verdicts": {"strategy_action": _pending_verdict_fields("GENERATE_TESTS")},
+    }
     controller.set_pending_decision(pending)
 
     outcome, feedback = apply_human_decision(pending, "GENERATE_TESTS", controller)
 
     assert outcome == "PROCEED"
+    assert controller.halted is False
 
 
 def test_human_request_clarification_pick_awaits_clarification(tmp_path):
     controller = RunController("test-run", tmp_path)
-    pending = {"tool_name": "generate_scenarios", "context": {}, "verdicts": {"strategy_action": "REQUEST_CLARIFICATION"}}
+    pending = {
+        "tool_name": "generate_scenarios",
+        "context": {},
+        "verdicts": {"strategy_action": _pending_verdict_fields("REQUEST_CLARIFICATION")},
+    }
     controller.set_pending_decision(pending)
 
     outcome, feedback = apply_human_decision(pending, "REQUEST_CLARIFICATION", controller)
 
     assert outcome == "AWAITING_CLARIFICATION"
+    assert controller.halted is True
+    assert controller.workflow_state == "AWAITING_CLARIFICATION"
 
 
 # -- STRATEGY state includes interpretation's ambiguities --------------------
