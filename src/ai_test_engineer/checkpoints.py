@@ -328,6 +328,41 @@ def build_coverage_checkpoint(
     return CheckpointSpec(build_questions=build_questions, resolve=resolve, build_state=build_state)
 
 
+class StageGuard(InterventionHandler):
+    """Registered ahead of HaltGuard/DeciderGuardrail: denies any tool not
+    allowed at the run's current stage (docs/03 Section 3: "Tools available
+    to the agent are limited per stage by the controller"), without ever
+    consulting Decider. A model that calls generate_scenarios/
+    save_scenario_set early -- e.g. during the INTERPRETING stage, before
+    orchestration has asked for it -- is denied right here; Decider is never
+    reached, so there's no verdict to escalate or resolve, and no decision
+    record. The denial is recorded as a stage_violation evidence event
+    instead (see RunController.record_stage_violation).
+    """
+
+    def __init__(self, controller: RunController, name: str = "stage-guard") -> None:
+        self._controller = controller
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def before_tool_call(self, event: Any, **kwargs: Any) -> Proceed | Deny:
+        allowed = self._controller.allowed_tools
+        if allowed is None:
+            return Proceed()
+        tool_name = event.tool_use["name"]
+        if tool_name in allowed:
+            return Proceed()
+        reason = (
+            f"{tool_name} is not available at stage {self._controller.tool_stage}; "
+            f"call only {sorted(allowed)}"
+        )
+        self._controller.record_stage_violation(tool_name, reason)
+        return Deny(reason=reason)
+
+
 class HaltGuard(InterventionHandler):
     """Registered ahead of DeciderGuardrail: denies every tool call while
     controller.halted, without ever reaching Decider.

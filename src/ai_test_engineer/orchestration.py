@@ -4,11 +4,17 @@ checkpoints wired in.
 
 One Strands Agent per run, backed by Bedrock, reused for every turn in that
 run including across a pause/resume (Agent._interrupt_state lives on the
-instance). generate_scenarios and save_scenario_set are gated by
-decider_gate.DeciderGuardrail via checkpoints built in checkpoints.py;
-interpret_requirement stays ungated. Remediation adds a differently-named
-tool (generate_missing_scenarios) rather than replacing generate_scenarios,
-so it never re-triggers the AMBIGUITY+STRATEGY checkpoint.
+instance). All three tools are registered on the Agent up front, so
+checkpoints.StageGuard (see STAGE_TOOLS below) is what actually keeps the
+model from calling e.g. generate_scenarios during the INTERPRETING stage --
+without it, a model that calls a tool early would reach
+decider_gate.DeciderGuardrail's checkpoints (built in checkpoints.py) and
+could escalate out of turn. generate_scenarios and save_scenario_set are
+gated by DeciderGuardrail; interpret_requirement and
+generate_missing_scenarios stay ungated (but still stage-limited).
+Remediation adds a differently-named tool (generate_missing_scenarios)
+rather than replacing generate_scenarios, so it never re-triggers the
+AMBIGUITY+STRATEGY checkpoint.
 
 _ACTIVE_RUNS is in-process only: it holds the live Agent object (and thus the
 only copy of its paused _interrupt_state) for any run that might later be
@@ -28,7 +34,7 @@ from decider_gate.intervention import DeciderGuardrail
 from strands import Agent
 
 from ai_test_engineer.bedrock import get_bedrock_model
-from ai_test_engineer.checkpoints import HaltGuard, apply_human_decision, build_all
+from ai_test_engineer.checkpoints import HaltGuard, StageGuard, apply_human_decision, build_all
 from ai_test_engineer.coverage import compute_coverage
 from ai_test_engineer.state import RunController
 from ai_test_engineer.tools import (
@@ -41,6 +47,17 @@ from ai_test_engineer.tools import (
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 INITIAL_TARGET_IDS = ["S01", "S02", "S03", "S05"]
+
+# docs/03 Section 3: "Tools available to the agent are limited per stage by
+# the controller." Enforced by checkpoints.StageGuard via
+# RunController.allowed_tools -- set here, consumed there.
+STAGE_TOOLS: dict[str, frozenset[str]] = {
+    "INTERPRETING": frozenset({"interpret_requirement"}),
+    "GENERATING": frozenset({"generate_scenarios"}),
+    "SCORING": frozenset({"save_scenario_set"}),
+    "REMEDIATING": frozenset({"generate_missing_scenarios"}),
+    "RESCORING": frozenset({"save_scenario_set"}),
+}
 
 # run_id -> {agent, controller, attempt_log, catalog, holder, last_result}
 # In-memory only -- see module docstring.
@@ -178,6 +195,7 @@ def _drive_recheck(run_id: str, feedback: str) -> dict:
     remediation_tool = build_generate_missing_scenarios_tool(attempt_log, ["S04"])
     run["agent"].tool_registry.process_tools([remediation_tool])  # new name -- no collision, no checkpoint
 
+    controller.set_stage("REMEDIATING", STAGE_TOOLS["REMEDIATING"])
     result = run["agent"](f"{feedback}\n\nCall generate_missing_scenarios with target_ids=['S04'] only.")
     run["last_result"] = result
     if result.stop_reason == "interrupt":
@@ -198,6 +216,7 @@ def _drive_recheck(run_id: str, feedback: str) -> dict:
     }
     attempt_log.overwrite_result("generate_scenarios", merged)
 
+    controller.set_stage("RESCORING", STAGE_TOOLS["RESCORING"])
     result = run["agent"]("Call save_scenario_set again to recheck coverage after remediation.")
     run["last_result"] = result
     if result.stop_reason == "interrupt":
@@ -237,9 +256,11 @@ def run_initial_pass() -> dict:
     agent = Agent(
         model=get_bedrock_model(),
         tools=[interpret_requirement, generate_scenarios, save_scenario_set],
-        # HaltGuard ahead of guardrail: registration order is dispatch order,
-        # and its Deny short-circuits the rest -- see checkpoints.HaltGuard.
-        interventions=[HaltGuard(controller), guardrail],
+        # Registration order is dispatch order, and a Deny short-circuits the
+        # rest: StageGuard (denies a tool the current stage doesn't allow,
+        # before Decider is ever consulted) ahead of HaltGuard (denies
+        # everything once a decision has halted the run) ahead of guardrail.
+        interventions=[StageGuard(controller), HaltGuard(controller), guardrail],
         # Strands' default callback handler prints raw model/tool-call deltas
         # to stdout and can crash on non-UTF-8 consoles (observed: a '→'
         # the model emitted raised UnicodeEncodeError on cp1252 Windows).
@@ -256,6 +277,7 @@ def run_initial_pass() -> dict:
     }
 
     try:
+        controller.set_stage("INTERPRETING", STAGE_TOOLS["INTERPRETING"])
         result = agent(_interpretation_prompt(requirement_text))  # ungated
         _ACTIVE_RUNS[run_id]["last_result"] = result
         if result.stop_reason == "interrupt":
@@ -273,6 +295,7 @@ def run_initial_pass() -> dict:
         controller.run_dir.mkdir(parents=True, exist_ok=True)
         (controller.run_dir / "interpretation.json").write_text(json.dumps(interpretation, indent=2))
 
+        controller.set_stage("GENERATING", STAGE_TOOLS["GENERATING"])
         result = agent(_generation_prompt(INITIAL_TARGET_IDS, catalog))  # gated: AMBIGUITY+STRATEGY
         _ACTIVE_RUNS[run_id]["last_result"] = result
         if result.stop_reason == "interrupt":
@@ -292,6 +315,7 @@ def run_initial_pass() -> dict:
         controller.run_dir.mkdir(parents=True, exist_ok=True)
         (controller.run_dir / "scenarios_initial.json").write_text(json.dumps(scenario_set, indent=2))
 
+        controller.set_stage("SCORING", STAGE_TOOLS["SCORING"])
         result = agent(
             "Call save_scenario_set now to score the scenario set you just produced."
         )  # gated: COVERAGE

@@ -18,6 +18,7 @@ from strands.interventions import Confirm, Deny, Proceed
 
 from ai_test_engineer.checkpoints import (
     HaltGuard,
+    StageGuard,
     apply_human_decision,
     build_all,
     build_coverage_checkpoint,
@@ -298,6 +299,46 @@ def test_halt_guard_clears_and_proceeds_again(tmp_path):
     action = HaltGuard(controller).before_tool_call(_make_event("save_scenario_set", {}))
 
     assert isinstance(action, Proceed)
+
+
+# -- StageGuard ---------------------------------------------------------------
+
+
+def test_stage_guard_proceeds_when_no_stage_set(tmp_path):
+    controller = RunController("test-run", tmp_path)
+
+    action = StageGuard(controller).before_tool_call(_make_event("generate_scenarios", {}))
+
+    assert isinstance(action, Proceed)
+
+
+def test_stage_guard_proceeds_for_a_tool_allowed_at_the_current_stage(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    controller.set_stage("GENERATING", {"generate_scenarios"})
+
+    action = StageGuard(controller).before_tool_call(_make_event("generate_scenarios", {}))
+
+    assert isinstance(action, Proceed)
+
+
+def test_stage_guard_denies_without_decider_and_records_stage_violation_not_a_decision(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    controller.set_stage("INTERPRETING", {"interpret_requirement"})
+
+    action = StageGuard(controller).before_tool_call(_make_event("generate_scenarios", {}))
+
+    assert isinstance(action, Deny)
+    assert "generate_scenarios" in action.reason
+    assert "INTERPRETING" in action.reason
+    assert controller.stage_violations == [
+        {
+            "stage": "INTERPRETING",
+            "tool_name": "generate_scenarios",
+            "reason": action.reason,
+        }
+    ]
+    assert controller.decisions == []  # never reached Decider -- no decision record
+    assert json.loads((tmp_path / "stage_violations.json").read_text()) == controller.stage_violations
 
 
 # -- generate_scenarios checkpoint resolve() ----------------------------------

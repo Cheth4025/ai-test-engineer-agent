@@ -55,6 +55,9 @@ class RunController:
         self._halt_reason: str | None = None
         self.pending_decision: dict | None = None
         self.decisions: list[dict] = []
+        self._tool_stage: str | None = None
+        self._allowed_tools: frozenset[str] | None = None
+        self.stage_violations: list[dict] = []
         self._save_state()
 
     # -- single-use flags: only the controller itself flips them ------------
@@ -119,6 +122,34 @@ class RunController:
     def halt_reason(self) -> str | None:
         return self._halt_reason
 
+    # -- per-stage tool gating ------------------------------------------------
+    #
+    # docs/03 Section 3: "Tools available to the agent are limited per stage
+    # by the controller." orchestration.py calls set_stage() before every
+    # agent() call; checkpoints.StageGuard (registered ahead of
+    # DeciderGuardrail) denies any tool not in allowed_tools before Decider
+    # is ever consulted, so a model that calls a tool early never reaches
+    # the real gate for it.
+
+    def set_stage(self, stage: str, allowed_tools: "frozenset[str] | set[str]") -> None:
+        self._tool_stage = stage
+        self._allowed_tools = frozenset(allowed_tools)
+        self._save_state()
+
+    @property
+    def tool_stage(self) -> str | None:
+        return self._tool_stage
+
+    @property
+    def allowed_tools(self) -> frozenset[str] | None:
+        return self._allowed_tools
+
+    def record_stage_violation(self, tool_name: str, reason: str) -> None:
+        self.stage_violations.append(
+            {"stage": self._tool_stage, "tool_name": tool_name, "reason": reason}
+        )
+        (self.run_dir / "stage_violations.json").write_text(json.dumps(self.stage_violations, indent=2))
+
     # -- state transitions / audit -------------------------------------------
 
     def set_workflow_state(self, workflow_state: str, *, stage: str | None = None, busy: bool = True) -> None:
@@ -152,6 +183,8 @@ class RunController:
                     "run_id": self.run_id,
                     "workflow_state": self.workflow_state,
                     "stage": self.stage,
+                    "tool_stage": self._tool_stage,
+                    "allowed_tools": sorted(self._allowed_tools) if self._allowed_tools else None,
                     "busy": self.busy,
                     "flags": {
                         "remediation_used": self._remediation_used,
