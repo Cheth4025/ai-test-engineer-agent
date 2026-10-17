@@ -109,6 +109,7 @@ def _run_with_attempt_cap(
 # ---------------------------------------------------------------------------
 
 REQUIRED_RULE_IDS = {f"BR0{n}" for n in range(1, 7)}
+AMBIGUITY_RULE_IDS = REQUIRED_RULE_IDS | {"GENERAL"}
 
 
 class RuleItem(BaseModel):
@@ -120,7 +121,7 @@ class RuleItem(BaseModel):
 
 class AmbiguityItem(BaseModel):
     id: str
-    rule_ids: list[str]
+    rule_id: str
     question: str
     critical: bool
     status: str
@@ -150,10 +151,10 @@ def _validate_interpretation(
             )
 
     for ambiguity in ambiguities:
-        if not ambiguity["rule_ids"]:
+        if ambiguity["rule_id"] not in AMBIGUITY_RULE_IDS:
             raise BedrockOutputError(
-                f"ambiguity {ambiguity['id']!r} has no rule_ids -- every ambiguity must name "
-                "which BR01-BR06 rule(s) it concerns"
+                f"ambiguity {ambiguity['id']!r} has rule_id {ambiguity['rule_id']!r} -- must be "
+                f"one of BR01-BR06, or GENERAL if it genuinely spans multiple rules"
             )
 
     return {
@@ -174,8 +175,9 @@ def build_interpret_requirement_tool(attempt_log: AttemptLog, requirement_text: 
                 source_excerpt (must be an exact substring of the requirement
                 text you were given), meaning, and expected_observations.
             ambiguities: Any ambiguities found in the requirement (may be
-                empty), each with id, rule_ids, question, critical, status,
-                and an optional human_response.
+                empty), each with id, rule_id (one of BR01-BR06, or GENERAL
+                if it genuinely spans multiple rules), question, critical,
+                status, and an optional human_response.
         """
 
         def _validate() -> dict:

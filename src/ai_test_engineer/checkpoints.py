@@ -109,7 +109,9 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
         )
 
     def _ambiguities_for_rule(rule_id: str) -> list[dict]:
-        return [a for a in _interpretation()["ambiguities"] if rule_id in a["rule_ids"]]
+        return [
+            a for a in _interpretation()["ambiguities"] if a["rule_id"] in (rule_id, "GENERAL")
+        ]
 
     def _ambiguity_lines_for_rule(rule_id: str) -> str:
         rule_ambiguities = _ambiguities_for_rule(rule_id)

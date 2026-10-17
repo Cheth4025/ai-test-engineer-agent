@@ -80,20 +80,36 @@ def test_interpretation_rejects_duplicate_rule_id():
         _validate_interpretation(bad_rules, [], REQUIREMENT_TEXT)
 
 
-def test_interpretation_rejects_ambiguity_with_no_rule_ids():
+def test_interpretation_rejects_ambiguity_with_invalid_rule_id():
     ambiguities = [
-        {"id": "AMB01", "rule_ids": [], "question": "which gateway?", "critical": False, "status": "open"}
+        {"id": "AMB01", "rule_id": "", "question": "which gateway?", "critical": False, "status": "open"}
     ]
-    with pytest.raises(BedrockOutputError, match="no rule_ids"):
+    with pytest.raises(BedrockOutputError, match="must be one of BR01-BR06"):
         _validate_interpretation(GOOD_RULES, ambiguities, REQUIREMENT_TEXT)
 
 
-def test_interpretation_accepts_ambiguity_with_rule_ids():
+def test_interpretation_rejects_ambiguity_with_unknown_rule_id():
     ambiguities = [
-        {"id": "AMB01", "rule_ids": ["BR01"], "question": "which gateway?", "critical": False, "status": "open"}
+        {"id": "AMB01", "rule_id": "BR99", "question": "which gateway?", "critical": False, "status": "open"}
+    ]
+    with pytest.raises(BedrockOutputError, match="must be one of BR01-BR06"):
+        _validate_interpretation(GOOD_RULES, ambiguities, REQUIREMENT_TEXT)
+
+
+def test_interpretation_accepts_ambiguity_with_a_single_rule_id():
+    ambiguities = [
+        {"id": "AMB01", "rule_id": "BR01", "question": "which gateway?", "critical": False, "status": "open"}
     ]
     result = _validate_interpretation(GOOD_RULES, ambiguities, REQUIREMENT_TEXT)
     assert result["ambiguities"][0]["id"] == "AMB01"
+
+
+def test_interpretation_accepts_ambiguity_with_general_rule_id():
+    ambiguities = [
+        {"id": "AMB01", "rule_id": "GENERAL", "question": "spans everything", "critical": False, "status": "open"}
+    ]
+    result = _validate_interpretation(GOOD_RULES, ambiguities, REQUIREMENT_TEXT)
+    assert result["ambiguities"][0]["rule_id"] == "GENERAL"
 
 
 def _scenario(scenario_id: str) -> dict:

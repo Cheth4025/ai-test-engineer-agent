@@ -455,3 +455,70 @@ def test_run_initial_pass_full_happy_path_through_remediation_reaches_five_of_fi
     # never mistaken for an out-of-stage call.
     assert controller.stage_violations == []
     assert not (controller.run_dir / "stage_violations.json").exists()
+
+    # Reproduces live run 20261017T135755Z_5204728f's crash: after an
+    # accepted 5/5, _finish_run must set a real terminal state -- not leave
+    # workflow_state/stage stuck at the last pause's AWAITING_DECISION_
+    # CONFIRMATION with pending_decision already cleared to None (which made
+    # the driver script's loop condition true while pending_decision was
+    # None, crashing on pending['tool_name']).
+    assert final["workflow_state"] == "AWAITING_APPROVAL"
+    assert final["stage"] == "AWAITING_APPROVAL"
+    assert controller.workflow_state == "AWAITING_APPROVAL"
+    assert controller.stage == "AWAITING_APPROVAL"
+    assert controller.pending_decision is None
+    assert json.loads((controller.run_dir / "state.json").read_text())["workflow_state"] == "AWAITING_APPROVAL"
+
+
+def test_run_initial_pass_script_terminates_cleanly_after_five_of_five(monkeypatch, tmp_path, capsys):
+    """Drives scripts/run_initial_pass.py's actual main() -- the human-input
+    driver loop -- through the same happy path, with input() monkeypatched
+    for the one human pick it needs. Before the _finish_run fix, main()'s
+    while loop kept looping on the stale AWAITING_DECISION_CONFIRMATION
+    stage with pending_decision already None, crashing on pending['tool_name']
+    inside _ask_human instead of terminating."""
+    import scripts.run_initial_pass as driver
+
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    requirement_text, catalog = _load_requirement_and_catalog()
+    rules = _rules_from_requirement(requirement_text)
+
+    model = ScriptedModel(
+        turns=[
+            [("interpret_requirement", {"rules": rules, "ambiguities": []})],
+            "Interpretation recorded.",
+            [
+                (
+                    "generate_scenarios",
+                    {
+                        "target_ids": orchestration.INITIAL_TARGET_IDS,
+                        "scenarios": [
+                            _scenario_from_catalog(catalog, sid) for sid in orchestration.INITIAL_TARGET_IDS
+                        ],
+                    },
+                )
+            ],
+            "Scenarios generated.",
+            [("save_scenario_set", {})],
+            "Acknowledged.",
+            [("generate_missing_scenarios", {"target_ids": ["S04"], "scenarios": [_scenario_from_catalog(catalog, "S04")]})],
+            "S04 regenerated.",
+            [("save_scenario_set", {})],
+            "Coverage accepted.",
+        ]
+    )
+    monkeypatch.setattr(orchestration, "get_bedrock_model", lambda: model)
+    monkeypatch.setattr(
+        checkpoints,
+        "DeciderClient",
+        _mock_decider_client_factory(httpx.MockTransport(_happy_path_decider_handler)),
+    )
+    human_choices = iter(["REMEDIATE_GAP"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(human_choices))
+
+    driver.main()  # must return normally -- no TypeError on pending['tool_name']
+
+    out = capsys.readouterr().out
+    assert "final workflow_state: AWAITING_APPROVAL  stage: AWAITING_APPROVAL" in out
+    with pytest.raises(StopIteration):
+        next(human_choices)  # exactly one human pick was asked for, no more

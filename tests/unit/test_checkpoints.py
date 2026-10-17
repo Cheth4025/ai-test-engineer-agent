@@ -537,7 +537,7 @@ def test_generate_scenarios_build_state_includes_ambiguities_summary(tmp_path):
         {
             "rules": ONE_RULE_INTERPRETATION["rules"],
             "ambiguities": [
-                {"id": "A1", "rule_ids": ["BR01"], "question": "which gateway?", "critical": True, "status": "OPEN"}
+                {"id": "A1", "rule_id": "BR01", "question": "which gateway?", "critical": True, "status": "OPEN"}
             ],
         },
     )
@@ -568,8 +568,8 @@ def test_generate_scenarios_build_state_labels_non_critical_ambiguities_out_of_s
         {
             "rules": ONE_RULE_INTERPRETATION["rules"],
             "ambiguities": [
-                {"id": "A1", "rule_ids": ["BR01"], "question": "critical one", "critical": True, "status": "open"},
-                {"id": "A2", "rule_ids": ["BR01"], "question": "non-critical one", "critical": False, "status": "open"},
+                {"id": "A1", "rule_id": "BR01", "question": "critical one", "critical": True, "status": "open"},
+                {"id": "A2", "rule_id": "BR01", "question": "non-critical one", "critical": False, "status": "open"},
             ],
         },
     )
@@ -596,8 +596,8 @@ def test_generate_scenarios_ambiguity_question_sees_only_its_own_rules_ambiguiti
                 {"rule_id": "BR02", "source_excerpt": "e2", "meaning": "meaning BR02", "expected_observations": []},
             ],
             "ambiguities": [
-                {"id": "A1", "rule_ids": ["BR01"], "question": "about BR01 only", "critical": True, "status": "open"},
-                {"id": "A2", "rule_ids": ["BR02"], "question": "about BR02 only", "critical": False, "status": "open"},
+                {"id": "A1", "rule_id": "BR01", "question": "about BR01 only", "critical": True, "status": "open"},
+                {"id": "A2", "rule_id": "BR02", "question": "about BR02 only", "critical": False, "status": "open"},
             ],
         },
     )
@@ -612,6 +612,30 @@ def test_generate_scenarios_ambiguity_question_sees_only_its_own_rules_ambiguiti
     assert "about BR01 only" not in questions["ambiguity_BR02"]["instructions"]
     assert "non-critical" in questions["ambiguity_BR02"]["instructions"]
     assert "out of scope for S01-S05" in questions["ambiguity_BR02"]["instructions"]
+
+
+def test_generate_scenarios_general_ambiguity_appears_under_every_rules_question(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": [
+                {"rule_id": "BR01", "source_excerpt": "e1", "meaning": "meaning BR01", "expected_observations": []},
+                {"rule_id": "BR02", "source_excerpt": "e2", "meaning": "meaning BR02", "expected_observations": []},
+            ],
+            "ambiguities": [
+                {"id": "A1", "rule_id": "GENERAL", "question": "spans everything", "critical": False, "status": "open"},
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "spans everything" in questions["ambiguity_BR01"]["instructions"]
+    assert "spans everything" in questions["ambiguity_BR02"]["instructions"]
 
 
 def test_decision_record_reused_marks_source_and_points_to_origin(tmp_path):
@@ -636,7 +660,7 @@ def test_generate_scenarios_strategy_question_references_ambiguity_evidence(tmp_
         {
             "rules": ONE_RULE_INTERPRETATION["rules"],
             "ambiguities": [
-                {"id": "A1", "rule_ids": ["BR01"], "question": "which gateway?", "critical": True, "status": "OPEN"}
+                {"id": "A1", "rule_id": "BR01", "question": "which gateway?", "critical": True, "status": "OPEN"}
             ],
         },
     )

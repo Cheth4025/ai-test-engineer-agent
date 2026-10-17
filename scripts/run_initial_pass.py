@@ -106,7 +106,11 @@ def main() -> None:
     controller = orchestration._ACTIVE_RUNS[run_id]["controller"]
     run_dir = controller.run_dir
 
-    while result.get("stage") == "AWAITING_DECISION_CONFIRMATION":
+    # controller.pending_decision, not result.get("pending_decision"): a
+    # REJECTED_RETRY result deliberately omits that key (apply_human_decision
+    # never touches pending_decision on a rejection -- see its docstring) but
+    # the decision is still open. The controller is the authoritative source.
+    while result.get("stage") == "AWAITING_DECISION_CONFIRMATION" and controller.pending_decision is not None:
         if "rejected_choice" in result:
             print(
                 f"\n'{result['rejected_choice']}' was rejected by the deterministic guard "

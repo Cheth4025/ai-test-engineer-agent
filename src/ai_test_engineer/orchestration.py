@@ -121,9 +121,10 @@ def _interpretation_prompt(requirement_text: str, catalog: dict) -> str:
         "a real open question -- e.g. key generation ownership, TTLs, and "
         "non-amount payload fields are out of scope for this fixed scenario "
         "set, so record them as non-critical ambiguities rather than "
-        "omitting them. Every ambiguity must carry rule_ids naming which "
-        "BR01-BR06 rule(s) it concerns -- never leave rule_ids empty. Call "
-        "interpret_requirement exactly once with all six rules together."
+        "omitting them. Every ambiguity must carry exactly one rule_id: one "
+        "of BR01-BR06, or GENERAL only if it genuinely spans multiple rules "
+        "-- never leave rule_id unset. Call interpret_requirement exactly "
+        "once with all six rules together."
     )
 
 
@@ -199,12 +200,22 @@ def _unexpected_interrupt_stop(run_id: str, controller: RunController, result, c
 
 
 def _finish_run(run_id: str) -> dict:
+    """Only ever reached after the COVERAGE checkpoint accepted a full 5/5
+    set (every other outcome -- BLOCKED, AWAITING_CLARIFICATION, a pause --
+    returns earlier). docs/05 Section 15 (REMEDIATING: "AWAITING_APPROVAL
+    only at valid 5/5") + docs/06 Section 3 (Approve requires "AWAITING_
+    APPROVAL; accepted 5/5"): accepted 5/5 moves the run to AWAITING_APPROVAL,
+    not whatever stage/workflow_state happened to be left over from the last
+    pause. Previously this was never set, so state.json kept reporting
+    stage=AWAITING_DECISION_CONFIRMATION with pending_decision=None after the
+    run actually finished."""
     run = _ACTIVE_RUNS[run_id]
     controller: RunController = run["controller"]
     scenario_set = run["attempt_log"].get_result("generate_scenarios")
     coverage = compute_coverage(
         scenario_set["scenarios"], run["catalog"], scenario_set_version=scenario_set["version"]
     )
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
     controller.run_dir.mkdir(parents=True, exist_ok=True)
     (controller.run_dir / "scenarios_final.json").write_text(json.dumps(scenario_set, indent=2))
     (controller.run_dir / "coverage_final.json").write_text(json.dumps(coverage, indent=2))

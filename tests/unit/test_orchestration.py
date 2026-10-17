@@ -47,7 +47,7 @@ def test_interpretation_prompt_includes_real_scenario_assertions_for_each_s01_s0
         scenario = _CATALOG["scenarios"][scenario_id]
         assert scenario["title"] in prompt
         assert scenario["required_assertions"][0]["observation"] in prompt
-    assert "rule_ids" in prompt
+    assert "rule_id" in prompt and "GENERAL" in prompt
 
 
 class _FakeInterrupt:
