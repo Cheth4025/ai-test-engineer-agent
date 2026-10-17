@@ -77,8 +77,31 @@ def _ask_human(pending: dict) -> str:
         print(f"'{choice}' is not one of {options}; try again.")
 
 
+def _stop_on_exception(exc: Exception, run_id: str | None = None) -> None:
+    """Never let an exception reach the top as a raw traceback: mark the run
+    STOPPED with a readable reason (docs/06 Section 4: "readable failure
+    reason ... never a fabricated success") and print that reason instead."""
+    controller = None
+    if run_id is not None:
+        active = orchestration._ACTIVE_RUNS.get(run_id)
+        controller = active["controller"] if active else None
+    elif orchestration._ACTIVE_RUNS:
+        controller = list(orchestration._ACTIVE_RUNS.values())[-1]["controller"]
+    if controller is not None:
+        controller.set_workflow_state("STOPPED", stage="STOPPED", busy=False)
+        controller.save_evidence(
+            "exception_stop.json", {"error_type": type(exc).__name__, "message": str(exc)}
+        )
+    print(f"\nRun stopped: {type(exc).__name__}: {exc}")
+
+
 def main() -> None:
-    result = orchestration.run_initial_pass()
+    try:
+        result = orchestration.run_initial_pass()
+    except Exception as exc:
+        _stop_on_exception(exc)
+        return
+
     run_id = result["run_id"]
     controller = orchestration._ACTIVE_RUNS[run_id]["controller"]
     run_dir = controller.run_dir
@@ -91,7 +114,11 @@ def main() -> None:
             )
         pending = controller.pending_decision
         choice = _ask_human(pending)
-        result = orchestration.resume_pending_decision(run_id, choice)
+        try:
+            result = orchestration.resume_pending_decision(run_id, choice)
+        except Exception as exc:
+            _stop_on_exception(exc, run_id)
+            return
 
     print(f"\nrun_id: {run_id}")
     print(f"final workflow_state: {result.get('workflow_state')}  stage: {result.get('stage')}")

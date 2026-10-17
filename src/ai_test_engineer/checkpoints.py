@@ -108,11 +108,32 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
             f"{a['id']} (critical={a['critical']}): {a['question']}" for a in ambiguities
         )
 
+    def _ambiguities_for_rule(rule_id: str) -> list[dict]:
+        return [a for a in _interpretation()["ambiguities"] if rule_id in a["rule_ids"]]
+
+    def _ambiguity_lines_for_rule(rule_id: str) -> str:
+        rule_ambiguities = _ambiguities_for_rule(rule_id)
+        if not rule_ambiguities:
+            return "No ambiguities recorded for this rule."
+        lines = [
+            f"{a['id']} (critical): {a['question']}"
+            if a["critical"]
+            else (
+                f"{a['id']} (non-critical): {a['question']} -- recorded, out of scope for "
+                "S01-S05, does not change any assertion"
+            )
+            for a in rule_ambiguities
+        ]
+        return "Known ambiguities for this rule: " + "; ".join(lines)
+
     def build_questions(state: Any) -> dict:
         questions = {
             f"ambiguity_{rule['rule_id']}": {
                 "type": "noul",
-                "instructions": f"Rule {rule['rule_id']}: {rule['meaning']}.",
+                "instructions": (
+                    f"Rule {rule['rule_id']}: {rule['meaning']}. "
+                    f"{_ambiguity_lines_for_rule(rule['rule_id'])}"
+                ),
                 "criteria": {
                     "true": (
                         f"Rule {rule['rule_id']} ({rule['meaning']}) leaves a question whose "
@@ -151,12 +172,27 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
 
     def build_state(state: Any) -> dict:
         interpretation = _interpretation()
+        ambiguities = interpretation["ambiguities"]
+        if not ambiguities:
+            ambiguities_state: Any = "none identified"
+        else:
+            ambiguities_state = [
+                {
+                    **a,
+                    "scope_note": (
+                        None
+                        if a["critical"]
+                        else "recorded, out of scope for S01-S05, does not change any assertion"
+                    ),
+                }
+                for a in ambiguities
+            ]
         return {
             "rules": [
                 {"rule_id": r["rule_id"], "source_excerpt": r["source_excerpt"], "meaning": r["meaning"]}
                 for r in _rules()
             ],
-            "ambiguities": interpretation["ambiguities"] or "none identified",
+            "ambiguities": ambiguities_state,
         }
 
     def resolve(verdicts: dict[str, Verdict]) -> Proceed | Deny:
@@ -360,6 +396,9 @@ class StageGuard(InterventionHandler):
             f"call only {sorted(allowed)}"
         )
         self._controller.record_stage_violation(tool_name, reason)
+        self._controller.record_tool_call(
+            tool_name, event.tool_use.get("toolUseId"), self._controller.tool_stage, self._name, "DENY"
+        )
         return Deny(reason=reason)
 
 
@@ -386,7 +425,11 @@ class HaltGuard(InterventionHandler):
 
     def before_tool_call(self, event: Any, **kwargs: Any) -> Proceed | Deny:
         if self._controller.halted:
-            return Deny(reason=self._controller.halt_reason or "HALTED: do not call further tools")
+            reason = self._controller.halt_reason or "HALTED: do not call further tools"
+            self._controller.record_tool_call(
+                event.tool_use["name"], event.tool_use.get("toolUseId"), self._controller.tool_stage, self._name, "DENY"
+            )
+            return Deny(reason=reason)
         return Proceed()
 
 
@@ -495,6 +538,31 @@ def _decision_record_human(
         "rejection_reason": rejection_reason,
         "per_question": _per_question_from_pending(per_question_fields),
     }
+
+
+def decision_record_reused(
+    tool_name: str,
+    verdicts: dict[str, Verdict],
+    action: Any,
+    origin_tool_use_id: str | None,
+    controller: RunController,
+    decider_cfg: dict,
+    host_label: str,
+) -> dict:
+    """A later toolUseId (a retry) reused a prior toolUseId's resolved decision
+    -- see decider_gate.intervention's "Decision reuse across toolUseIds".
+    Same shape as a fresh DECIDER/HUMAN_ESCALATION record, so decisions.json
+    stays one consistent audit trail, with decision_source=REUSED and a
+    pointer (the origin toolUseId -- cross-referenceable against
+    tool_calls.json) to the decision this one reused instead of re-asking."""
+    record = _decision_record(tool_name, verdicts, action, controller, decider_cfg, host_label)
+    record["decision_source"] = "REUSED"
+    record["reused_from_tool_use_id"] = origin_tool_use_id
+    record["rationale"] = (
+        f"reused cached decision for {tool_name} (no new Decider call); "
+        f"origin toolUseId={origin_tool_use_id!r}"
+    )
+    return record
 
 
 def build_all(

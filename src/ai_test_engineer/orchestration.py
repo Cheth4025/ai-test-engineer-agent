@@ -34,7 +34,13 @@ from decider_gate.intervention import DeciderGuardrail
 from strands import Agent
 
 from ai_test_engineer.bedrock import get_bedrock_model
-from ai_test_engineer.checkpoints import HaltGuard, StageGuard, apply_human_decision, build_all
+from ai_test_engineer.checkpoints import (
+    HaltGuard,
+    StageGuard,
+    apply_human_decision,
+    build_all,
+    decision_record_reused,
+)
 from ai_test_engineer.coverage import compute_coverage
 from ai_test_engineer.state import RunController
 from ai_test_engineer.tools import (
@@ -73,7 +79,23 @@ def _new_run_id() -> str:
     return f"{timestamp}_{uuid.uuid4().hex[:8]}"
 
 
-def _interpretation_prompt(requirement_text: str) -> str:
+def _scenario_summaries(catalog: dict) -> str:
+    """One line per S01-S05: title + the concrete outcome its assertions
+    check -- so the interpretation prompt can judge `critical` against the
+    real scenarios instead of a vague description. Built from
+    required_assertions' own observation/operator/expected, same fields
+    checkpoints.py's grounding question embeds."""
+    lines = []
+    for scenario_id in sorted(catalog["scenarios"]):
+        scenario = catalog["scenarios"][scenario_id]
+        assertions = "; ".join(
+            f"{a['observation']} {a['operator']} {a['expected']!r}" for a in scenario["required_assertions"]
+        )
+        lines.append(f"{scenario_id} ({scenario['test_id']}) '{scenario['title']}': asserts {assertions}")
+    return "\n".join(lines)
+
+
+def _interpretation_prompt(requirement_text: str, catalog: dict) -> str:
     return (
         "Here is the bundled payment-retry requirement text, verbatim:\n\n"
         f"{requirement_text}\n\n"
@@ -88,16 +110,20 @@ def _interpretation_prompt(requirement_text: str) -> str:
         "covering exactly five fixed scenarios, S01 through S05 (tests T01 "
         "through T05), each run against deterministic fixtures -- "
         "\"scripted\" means the fixture's deterministic script, nothing "
-        "live or production. Mark an ambiguity critical ONLY if resolving "
-        "it would change what one of S01-S05/T01-T05 must assert -- e.g. "
+        "live or production. Here is exactly what each of those five "
+        "scenarios asserts, so judge `critical` against these real "
+        f"scenarios, not a guess at what they might cover:\n\n{_scenario_summaries(catalog)}\n\n"
+        "Mark an ambiguity critical ONLY if resolving it would change what "
+        "one of S01-S05/T01-T05 must assert per the list above -- e.g. "
         "which exact condition, value, branch, or outcome one of those five "
         "scenarios needs to check. An ambiguity about a topic that cannot "
         "change any of S01-S05's assertions is NOT critical, even if it is "
         "a real open question -- e.g. key generation ownership, TTLs, and "
         "non-amount payload fields are out of scope for this fixed scenario "
         "set, so record them as non-critical ambiguities rather than "
-        "omitting them. Call interpret_requirement exactly once with all "
-        "six rules together."
+        "omitting them. Every ambiguity must carry rule_ids naming which "
+        "BR01-BR06 rule(s) it concerns -- never leave rule_ids empty. Call "
+        "interpret_requirement exactly once with all six rules together."
     )
 
 
@@ -123,12 +149,26 @@ def _paused(run_id: str, controller: RunController) -> dict:
     controller.set_workflow_state(
         controller.workflow_state, stage="AWAITING_DECISION_CONFIRMATION", busy=False
     )
+    _write_tool_attempts(run_id)
     return {
         "run_id": run_id,
         "stage": "AWAITING_DECISION_CONFIRMATION",
         "workflow_state": controller.workflow_state,
         "pending_decision": controller.pending_decision,
     }
+
+
+def _write_tool_attempts(run_id: str) -> None:
+    """Best-effort: a no-op if run_id was never registered in _ACTIVE_RUNS
+    (e.g. a unit test driving a helper directly against a bare controller),
+    never a KeyError on an exit path that is trying to leave evidence behind."""
+    run = _ACTIVE_RUNS.get(run_id)
+    if run is None:
+        return
+    controller: RunController = run["controller"]
+    attempt_log: AttemptLog = run["attempt_log"]
+    controller.run_dir.mkdir(parents=True, exist_ok=True)
+    (controller.run_dir / "tool_attempts.json").write_text(json.dumps(attempt_log.as_dict(), indent=2))
 
 
 def _unexpected_interrupt_stop(run_id: str, controller: RunController, result, context: str) -> dict:
@@ -148,6 +188,7 @@ def _unexpected_interrupt_stop(run_id: str, controller: RunController, result, c
         "unexpected_interrupt.json", {"context": context, "interrupts": interrupts}
     )
     controller.set_workflow_state("STOPPED", stage="STOPPED", busy=False)
+    _write_tool_attempts(run_id)
     return {
         "run_id": run_id,
         "workflow_state": "STOPPED",
@@ -167,7 +208,7 @@ def _finish_run(run_id: str) -> dict:
     controller.run_dir.mkdir(parents=True, exist_ok=True)
     (controller.run_dir / "scenarios_final.json").write_text(json.dumps(scenario_set, indent=2))
     (controller.run_dir / "coverage_final.json").write_text(json.dumps(coverage, indent=2))
-    (controller.run_dir / "tool_attempts.json").write_text(json.dumps(run["attempt_log"].as_dict(), indent=2))
+    _write_tool_attempts(run_id)
     return {
         "run_id": run_id,
         "workflow_state": controller.workflow_state,
@@ -222,7 +263,48 @@ def _drive_recheck(run_id: str, feedback: str) -> dict:
     if result.stop_reason == "interrupt":
         return _paused(run_id, controller)
     if controller.workflow_state == "BLOCKED":  # second gap
+        _write_tool_attempts(run_id)
         return {"run_id": run_id, "workflow_state": "BLOCKED", "stage": "BLOCKED"}
+    return _finish_run(run_id)
+
+
+def _continue_to_scoring(run_id: str) -> dict:
+    """Drives the SCORING stage for a scenario set that generate_scenarios
+    just produced, whichever path got it there: run_initial_pass's own
+    (possibly AUTO-resolved) agent() call, or resume_pending_decision after a
+    human resumed the AMBIGUITY+STRATEGY checkpoint's escalation with
+    GENERATE_TESTS. Both must reach the exact same next step -- grab the
+    scenario set, write scenarios_initial.json, gate into SCORING, and ask
+    the model to call save_scenario_set -- so this is the one shared
+    implementation, never duplicated between the two callers."""
+    run = _ACTIVE_RUNS[run_id]
+    controller: RunController = run["controller"]
+    attempt_log: AttemptLog = run["attempt_log"]
+    holder: dict = run["holder"]
+
+    scenario_set = attempt_log.get_result("generate_scenarios")
+    if scenario_set is None:
+        raise RuntimeError(
+            "generate_scenarios did not produce a valid result after "
+            f"{attempt_log.count('generate_scenarios')} attempt(s); stopping run."
+        )
+    controller.run_dir.mkdir(parents=True, exist_ok=True)
+    (controller.run_dir / "scenarios_initial.json").write_text(json.dumps(scenario_set, indent=2))
+
+    controller.set_stage("SCORING", STAGE_TOOLS["SCORING"])
+    result = run["agent"](
+        "Call save_scenario_set now to score the scenario set you just produced."
+    )  # gated: COVERAGE
+    run["last_result"] = result
+    if result.stop_reason == "interrupt":
+        return _paused(run_id, controller)
+    if controller.workflow_state == "BLOCKED":
+        _write_tool_attempts(run_id)
+        return {"run_id": run_id, "workflow_state": "BLOCKED", "stage": "BLOCKED"}
+    feedback = holder.pop("remediation_feedback", None)
+    if feedback is not None:
+        return _drive_recheck(run_id, feedback)
+
     return _finish_run(run_id)
 
 
@@ -244,6 +326,15 @@ def run_initial_pass() -> dict:
     client, gate, checkpoints, on_decision, on_error, host_label = build_all(
         attempt_log, catalog, controller, decider_cfg, holder
     )
+
+    def on_reuse(tool_name: str, verdicts: dict, action, origin_tool_use_id: str | None) -> None:
+        controller.record_decision(
+            decision_record_reused(tool_name, verdicts, action, origin_tool_use_id, controller, decider_cfg, host_label)
+        )
+
+    def on_call(tool_name: str, tool_use_id: str | None, action) -> None:
+        controller.record_tool_call(tool_name, tool_use_id, controller.tool_stage, "decider-gate", type(action).__name__)
+
     guardrail = DeciderGuardrail(
         client=client,
         gate=gate,
@@ -251,6 +342,8 @@ def run_initial_pass() -> dict:
         host_label=host_label,
         on_decision=on_decision,
         on_error=on_error,
+        on_reuse=on_reuse,
+        on_call=on_call,
     )
 
     agent = Agent(
@@ -278,7 +371,7 @@ def run_initial_pass() -> dict:
 
     try:
         controller.set_stage("INTERPRETING", STAGE_TOOLS["INTERPRETING"])
-        result = agent(_interpretation_prompt(requirement_text))  # ungated
+        result = agent(_interpretation_prompt(requirement_text, catalog))  # ungated
         _ACTIVE_RUNS[run_id]["last_result"] = result
         if result.stop_reason == "interrupt":
             # interpret_requirement itself never gates; a pending interrupt here
@@ -301,34 +394,13 @@ def run_initial_pass() -> dict:
         if result.stop_reason == "interrupt":
             return _paused(run_id, controller)
         if controller.workflow_state == "AWAITING_CLARIFICATION":
+            _write_tool_attempts(run_id)
             return {
                 "run_id": run_id,
                 "workflow_state": "AWAITING_CLARIFICATION",
                 "stage": "AWAITING_CLARIFICATION",
             }
-        scenario_set = attempt_log.get_result("generate_scenarios")
-        if scenario_set is None:
-            raise RuntimeError(
-                "generate_scenarios did not produce a valid result after "
-                f"{attempt_log.count('generate_scenarios')} attempt(s); stopping run."
-            )
-        controller.run_dir.mkdir(parents=True, exist_ok=True)
-        (controller.run_dir / "scenarios_initial.json").write_text(json.dumps(scenario_set, indent=2))
-
-        controller.set_stage("SCORING", STAGE_TOOLS["SCORING"])
-        result = agent(
-            "Call save_scenario_set now to score the scenario set you just produced."
-        )  # gated: COVERAGE
-        _ACTIVE_RUNS[run_id]["last_result"] = result
-        if result.stop_reason == "interrupt":
-            return _paused(run_id, controller)
-        if controller.workflow_state == "BLOCKED":
-            return {"run_id": run_id, "workflow_state": "BLOCKED", "stage": "BLOCKED"}
-        feedback = holder.pop("remediation_feedback", None)
-        if feedback is not None:
-            return _drive_recheck(run_id, feedback)
-
-        return _finish_run(run_id)
+        return _continue_to_scoring(run_id)
     finally:
         controller.run_dir.mkdir(parents=True, exist_ok=True)
         (controller.run_dir / "tool_attempts.json").write_text(json.dumps(attempt_log.as_dict(), indent=2))
@@ -383,11 +455,20 @@ def resume_pending_decision(run_id: str, human_choice: str) -> dict:
     if outcome == "REMEDIATION_SCHEDULED":
         return _drive_recheck(run_id, feedback)
     if outcome == "BLOCKED":
+        _write_tool_attempts(run_id)
         return {"run_id": run_id, "workflow_state": "BLOCKED", "stage": "BLOCKED"}
     if outcome == "AWAITING_CLARIFICATION":
+        _write_tool_attempts(run_id)
         return {
             "run_id": run_id,
             "workflow_state": "AWAITING_CLARIFICATION",
             "stage": "AWAITING_CLARIFICATION",
         }
-    return _finish_run(run_id)  # PROCEED
+    if outcome == "PROCEED" and pending["tool_name"] == "generate_scenarios":
+        # The AMBIGUITY+STRATEGY checkpoint's own escalation, now answered by
+        # a human: continue exactly where run_initial_pass's AUTO path would
+        # have -- into SCORING -- rather than finishing the run on a
+        # scenario set that was never actually scored. See
+        # _continue_to_scoring's docstring.
+        return _continue_to_scoring(run_id)
+    return _finish_run(run_id)  # PROCEED (save_scenario_set's ACCEPT_COVERAGE)

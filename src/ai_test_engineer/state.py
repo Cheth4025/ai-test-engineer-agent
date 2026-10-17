@@ -58,6 +58,7 @@ class RunController:
         self._tool_stage: str | None = None
         self._allowed_tools: frozenset[str] | None = None
         self.stage_violations: list[dict] = []
+        self.tool_calls: list[dict] = []
         self._save_state()
 
     # -- single-use flags: only the controller itself flips them ------------
@@ -149,6 +150,23 @@ class RunController:
             {"stage": self._tool_stage, "tool_name": tool_name, "reason": reason}
         )
         (self.run_dir / "stage_violations.json").write_text(json.dumps(self.stage_violations, indent=2))
+
+    def record_tool_call(
+        self, tool_name: str, tool_use_id: str | None, stage: str | None, guard: str, outcome: str
+    ) -> None:
+        """One row per before_tool_call pass (every registered tool, gated or
+        not): which guard made the final decision and what it was. Lets a run
+        be fully reconstructed alongside decisions.json/stage_violations.json."""
+        self.tool_calls.append(
+            {
+                "tool_name": tool_name,
+                "tool_use_id": tool_use_id,
+                "stage": stage,
+                "guard": guard,
+                "outcome": outcome,
+            }
+        )
+        (self.run_dir / "tool_calls.json").write_text(json.dumps(self.tool_calls, indent=2))
 
     # -- state transitions / audit -------------------------------------------
 

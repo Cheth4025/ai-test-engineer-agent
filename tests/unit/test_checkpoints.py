@@ -23,6 +23,7 @@ from ai_test_engineer.checkpoints import (
     build_all,
     build_coverage_checkpoint,
     build_generate_scenarios_checkpoint,
+    decision_record_reused,
     full_coverage,
     grounding_items,
     remediation_feedback,
@@ -557,6 +558,74 @@ def test_generate_scenarios_build_state_says_none_identified_when_no_ambiguities
     state = checkpoint.build_state(None)
 
     assert state["ambiguities"] == "none identified"
+
+
+def test_generate_scenarios_build_state_labels_non_critical_ambiguities_out_of_scope(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": ONE_RULE_INTERPRETATION["rules"],
+            "ambiguities": [
+                {"id": "A1", "rule_ids": ["BR01"], "question": "critical one", "critical": True, "status": "open"},
+                {"id": "A2", "rule_ids": ["BR01"], "question": "non-critical one", "critical": False, "status": "open"},
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    state = checkpoint.build_state(None)
+
+    by_id = {a["id"]: a for a in state["ambiguities"]}
+    assert by_id["A1"]["scope_note"] is None
+    assert by_id["A2"]["scope_note"] == (
+        "recorded, out of scope for S01-S05, does not change any assertion"
+    )
+
+
+def test_generate_scenarios_ambiguity_question_sees_only_its_own_rules_ambiguities(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": [
+                {"rule_id": "BR01", "source_excerpt": "e1", "meaning": "meaning BR01", "expected_observations": []},
+                {"rule_id": "BR02", "source_excerpt": "e2", "meaning": "meaning BR02", "expected_observations": []},
+            ],
+            "ambiguities": [
+                {"id": "A1", "rule_ids": ["BR01"], "question": "about BR01 only", "critical": True, "status": "open"},
+                {"id": "A2", "rule_ids": ["BR02"], "question": "about BR02 only", "critical": False, "status": "open"},
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "about BR01 only" in questions["ambiguity_BR01"]["instructions"]
+    assert "about BR02 only" not in questions["ambiguity_BR01"]["instructions"]
+    assert "about BR02 only" in questions["ambiguity_BR02"]["instructions"]
+    assert "about BR01 only" not in questions["ambiguity_BR02"]["instructions"]
+    assert "non-critical" in questions["ambiguity_BR02"]["instructions"]
+    assert "out of scope for S01-S05" in questions["ambiguity_BR02"]["instructions"]
+
+
+def test_decision_record_reused_marks_source_and_points_to_origin(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    verdicts = {"q1": _noul_verdict("q1", True)}
+    action = Proceed()
+
+    record = decision_record_reused(
+        "generate_scenarios", verdicts, action, "tool-use-1", controller, DECIDER_CFG, "local-cpu"
+    )
+
+    assert record["decision_source"] == "REUSED"
+    assert record["reused_from_tool_use_id"] == "tool-use-1"
+    assert record["checkpoint"] == "AMBIGUITY+STRATEGY"
 
 
 def test_generate_scenarios_strategy_question_references_ambiguity_evidence(tmp_path):

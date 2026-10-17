@@ -149,6 +149,13 @@ def _validate_interpretation(
                 f"requirement text: {rule['source_excerpt']!r}"
             )
 
+    for ambiguity in ambiguities:
+        if not ambiguity["rule_ids"]:
+            raise BedrockOutputError(
+                f"ambiguity {ambiguity['id']!r} has no rule_ids -- every ambiguity must name "
+                "which BR01-BR06 rule(s) it concerns"
+            )
+
     return {
         "rules": [dict(rule) for rule in rules],
         "ambiguities": [dict(ambiguity) for ambiguity in ambiguities],

@@ -289,6 +289,112 @@ def _happy_path_decider_handler(request: httpx.Request) -> httpx.Response:
     raise AssertionError(f"unrecognized checkpoint questions: {list(questions)!r}")
 
 
+def _escalating_ambiguity_handler(request: httpx.Request) -> httpx.Response:
+    """AMBIGUITY+STRATEGY always escalates (low confidence); COVERAGE behaves
+    like the happy path. Used to reproduce the live-run crash: a human
+    resolves the AMBIGUITY+STRATEGY escalation, then the model retries
+    generate_scenarios with a brand new toolUseId -- that retry must reuse
+    the human's answer (decider_gate's decision cache), never ask Decider or
+    escalate a second time."""
+    body = json.loads(request.content)
+    questions = body["questions"]
+    if "strategy_action" in questions:
+        answers = {}
+        for name in questions:
+            if name == "strategy_action":
+                answers[name] = {
+                    "type": "choice",
+                    "choice": "REQUEST_CLARIFICATION",
+                    "probabilities": {"GENERATE_TESTS": 0.45, "REQUEST_CLARIFICATION": 0.55},
+                    "confidence": 0.55,  # below threshold -> ESCALATE
+                }
+            elif name.startswith("ambiguity_"):
+                answers[name] = {"type": "noul", "noul": 0.55}  # between bands -> ESCALATE
+            else:
+                raise AssertionError(f"unexpected question {name!r}")
+        return httpx.Response(200, json={"model": "m", "answers": answers, "usage": {}})
+    return _happy_path_decider_handler(request)
+
+
+def test_retry_with_new_tool_use_id_reuses_human_answer_and_still_reaches_five_of_five(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    requirement_text, catalog = _load_requirement_and_catalog()
+    rules = _rules_from_requirement(requirement_text)
+    scenarios_s01_s05 = [_scenario_from_catalog(catalog, sid) for sid in orchestration.INITIAL_TARGET_IDS]
+
+    decider_calls: list[dict] = []
+
+    def _counting_handler(request: httpx.Request) -> httpx.Response:
+        decider_calls.append(json.loads(request.content)["questions"])
+        return _escalating_ambiguity_handler(request)
+
+    model = ScriptedModel(
+        turns=[
+            [("interpret_requirement", {"rules": rules, "ambiguities": []})],
+            "Interpretation recorded.",
+            [("generate_scenarios", {"target_ids": orchestration.INITIAL_TARGET_IDS, "scenarios": scenarios_s01_s05})],
+            # -- paused here: AMBIGUITY+STRATEGY escalated --
+            # Resuming lets the original toolUseId's generate_scenarios run,
+            # then (as in the live crash) the model retries with a NEW
+            # toolUseId and the identical scenario set.
+            [("generate_scenarios", {"target_ids": orchestration.INITIAL_TARGET_IDS, "scenarios": scenarios_s01_s05})],
+            "Scenarios generated.",
+            [("save_scenario_set", {})],
+            # -- paused here: COVERAGE escalated (4/5) --
+            "Acknowledged.",
+            [("generate_missing_scenarios", {"target_ids": ["S04"], "scenarios": [_scenario_from_catalog(catalog, "S04")]})],
+            "S04 regenerated.",
+            [("save_scenario_set", {})],
+            "Coverage accepted.",
+        ]
+    )
+    monkeypatch.setattr(orchestration, "get_bedrock_model", lambda: model)
+    monkeypatch.setattr(
+        checkpoints,
+        "DeciderClient",
+        _mock_decider_client_factory(httpx.MockTransport(_counting_handler)),
+    )
+
+    result = orchestration.run_initial_pass()
+    assert result["stage"] == "AWAITING_DECISION_CONFIRMATION"
+    assert result["pending_decision"]["tool_name"] == "generate_scenarios"
+    run_id = result["run_id"]
+    controller = orchestration._ACTIVE_RUNS[run_id]["controller"]
+
+    # Human answers the AMBIGUITY+STRATEGY escalation -- the model's retry
+    # (new toolUseId, same state) must reuse this without a new Decider call
+    # or a new escalation, and the run must still reach the SCORING stage.
+    after_generation = orchestration.resume_pending_decision(run_id, "GENERATE_TESTS")
+    assert after_generation["stage"] == "AWAITING_DECISION_CONFIRMATION"
+    assert after_generation["pending_decision"]["tool_name"] == "save_scenario_set"
+
+    reused = [d for d in controller.decisions if d["decision_source"] == "REUSED"]
+    assert len(reused) == 1
+    assert reused[0]["checkpoint"] == "AMBIGUITY+STRATEGY"
+    assert reused[0]["reused_from_tool_use_id"] is not None
+
+    final = orchestration.resume_pending_decision(run_id, "REMEDIATE_GAP")
+    assert final["workflow_state"] not in {"STOPPED", "BLOCKED"}
+    assert final["coverage"]["covered"] == 5
+    assert final["coverage"]["required"] == 5
+
+    # 3 real Decider calls: AMBIGUITY+STRATEGY (escalate), COVERAGE 4/5
+    # (escalate), COVERAGE 5/5 (AUTO) -- the retry never added a 4th.
+    assert len(decider_calls) == 3
+
+    tool_calls = json.loads((controller.run_dir / "tool_calls.json").read_text())
+    decider_gate_rows = [r for r in tool_calls if r["tool_name"] == "generate_scenarios"]
+    # One row per before_tool_call pass: the original escalation (Confirm),
+    # Strands' own resume replay of that SAME toolUseId resolving it
+    # (Proceed), and the retry's new toolUseId reusing that resolution
+    # (Proceed) -- three passes, fully reconstructable, zero extra Decider calls.
+    assert [r["outcome"] for r in decider_gate_rows] == ["Confirm", "Proceed", "Proceed"]
+    assert decider_gate_rows[0]["tool_use_id"] == decider_gate_rows[1]["tool_use_id"]
+    assert decider_gate_rows[2]["tool_use_id"] != decider_gate_rows[0]["tool_use_id"]
+
+
 def test_run_initial_pass_full_happy_path_through_remediation_reaches_five_of_five(
     monkeypatch, tmp_path
 ):
