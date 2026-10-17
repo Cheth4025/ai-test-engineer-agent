@@ -20,6 +20,8 @@ from ai_test_engineer.tools import (
     _run_with_attempt_cap,
     _validate_interpretation,
     _validate_scenario_set,
+    build_generate_missing_scenarios_tool,
+    build_save_scenario_set_tool,
 )
 
 REQUIREMENT_TEXT = (
@@ -185,3 +187,91 @@ def test_attempt_cap_allows_success_after_one_failure():
     assert result == {"ok": True}
     assert attempt_log.get_result("generate_scenarios") == {"ok": True}
     assert attempt_log.count("generate_scenarios") == 2
+
+
+# -- overwrite_result ---------------------------------------------------------
+
+
+def test_overwrite_result_replaces_without_recording_attempt():
+    attempt_log = AttemptLog()
+    attempt_log.record_success("generate_scenarios", 1, {"version": 1, "scenarios": []})
+
+    attempt_log.overwrite_result("generate_scenarios", {"version": 2, "scenarios": ["merged"]})
+
+    assert attempt_log.get_result("generate_scenarios") == {"version": 2, "scenarios": ["merged"]}
+    assert attempt_log.count("generate_scenarios") == 1  # no new attempt recorded
+
+
+# -- save_scenario_set ---------------------------------------------------------
+
+_MINI_CATALOG = {
+    "required_scenarios": ["S01"],
+    "scenarios": {
+        "S01": {
+            "scenario_id": "S01",
+            "test_id": "T01",
+            "rule_ids": ["BR01"],
+            "required_preconditions": ["precondition"],
+            "required_action_codes": ["CODE"],
+            "required_assertions": [{"observation": "obs", "operator": "EQ", "expected": 1}],
+        }
+    },
+}
+
+
+def test_save_scenario_set_zero_arg_reads_attempt_log():
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "generate_scenarios", 1, {"version": 1, "scenarios": [_scenario("S01")], "omission_event": None}
+    )
+    save_scenario_set = build_save_scenario_set_tool(attempt_log, _MINI_CATALOG)
+
+    result = save_scenario_set()
+
+    assert result["scenario_set"]["scenarios"][0]["scenario_id"] == "S01"
+    assert result["coverage"]["covered"] == 1
+    assert result["coverage"]["required"] == 1
+
+
+def test_save_scenario_set_before_generate_scenarios_raises():
+    attempt_log = AttemptLog()
+    save_scenario_set = build_save_scenario_set_tool(attempt_log, _MINI_CATALOG)
+
+    with pytest.raises(BedrockOutputError, match="before generate_scenarios succeeded"):
+        save_scenario_set()
+
+
+def test_save_scenario_set_exhausts_after_two_attempts():
+    attempt_log = AttemptLog()
+    save_scenario_set = build_save_scenario_set_tool(attempt_log, _MINI_CATALOG)
+
+    with pytest.raises(BedrockOutputError):
+        save_scenario_set()
+    with pytest.raises(ToolAttemptsExhausted):
+        save_scenario_set()
+
+
+# -- generate_missing_scenarios ------------------------------------------------
+
+
+def test_generate_missing_scenarios_validates_against_its_own_target_ids():
+    attempt_log = AttemptLog()
+    generate_missing_scenarios = build_generate_missing_scenarios_tool(attempt_log, ["S04"])
+
+    result = generate_missing_scenarios(target_ids=["S04"], scenarios=[_scenario("S04")])
+
+    assert {s["scenario_id"] for s in result["scenarios"]} == {"S04"}
+    assert result["omission_event"] is None  # S04 is present in this call's target_ids
+
+
+def test_generate_missing_scenarios_has_independent_attempt_budget_from_generate_scenarios():
+    attempt_log = AttemptLog()
+    attempt_log.record_failure("generate_scenarios", 1, "unrelated failure")
+    attempt_log.record_failure("generate_scenarios", 2, "unrelated failure")
+    generate_missing_scenarios = build_generate_missing_scenarios_tool(attempt_log, ["S04"])
+
+    # generate_scenarios' budget is exhausted, but generate_missing_scenarios
+    # tracks attempts under its own key and is unaffected.
+    result = generate_missing_scenarios(target_ids=["S04"], scenarios=[_scenario("S04")])
+
+    assert {s["scenario_id"] for s in result["scenarios"]} == {"S04"}

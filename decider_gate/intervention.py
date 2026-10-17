@@ -36,10 +36,19 @@ class CheckpointSpec:
     verdict in this checkpoint routed AUTO; an ESCALATE anywhere in the
     checkpoint is always handled generically by DeciderGuardrail instead
     (returns Confirm), so resolve never has to handle it.
+
+    build_state(state) -> Any, optional. If supplied, its return value is sent
+    to Decider as `state` instead of the raw tool input -- lets a caller whose
+    guarded tool takes few/no arguments (e.g. a zero-arg tool that reads prior
+    context from elsewhere) still give Decider a rich state payload. Called
+    after build_questions, so it may read context build_questions populated
+    in a shared closure. Defaults to None, meaning "send the raw tool input
+    unchanged" -- the existing behavior.
     """
 
     build_questions: Callable[[Any], dict]
     resolve: Callable[[dict[str, Verdict]], Proceed | Guide | Deny]
+    build_state: Callable[[Any], Any] | None = None
 
 
 class DeciderGuardrail(InterventionHandler):
@@ -79,7 +88,8 @@ class DeciderGuardrail(InterventionHandler):
 
         try:
             questions = spec.build_questions(state)
-            response = self._client.ask(state=state, questions=questions)
+            decider_state = spec.build_state(state) if spec.build_state is not None else state
+            response = self._client.ask(state=decider_state, questions=questions)
             verdicts = {
                 question_name: self._gate.evaluate(
                     question_name,

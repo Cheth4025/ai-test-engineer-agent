@@ -213,6 +213,47 @@ def test_guardrail_proceeds_on_unguarded_tool():
     assert isinstance(action, Proceed)
 
 
+def test_build_state_overrides_state_sent_to_decider():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.9}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+        build_state=lambda state: {"richer": "state", "raw_input": state},
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+    guardrail.before_tool_call(_make_event("guarded_tool", {"some": "input"}))
+
+    assert captured["body"]["state"] == {"richer": "state", "raw_input": {"some": "input"}}
+
+
+def test_build_state_defaults_to_raw_tool_input_when_absent():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.9}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+    guardrail.before_tool_call(_make_event("guarded_tool", {"some": "input"}))
+
+    assert captured["body"]["state"] == {"some": "input"}
+
+
 def test_guardrail_auto_true_resolves_via_checkpoint_spec():
     client = make_client(_noul_response_handler(0.9))
     spec = CheckpointSpec(
