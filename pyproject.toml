@@ -7,6 +7,7 @@ license = "Apache-2.0"
 dependencies = [
     "httpx>=0.28.1",
     "strands-agents>=1.61.0",
+    "streamlit==1.66.0",
 ]
 
 [dependency-groups]
