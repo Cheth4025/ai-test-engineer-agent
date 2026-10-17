@@ -20,6 +20,8 @@ from typing import Any
 from pydantic import BaseModel
 from strands import tool
 
+from ai_test_engineer.coverage import compute_coverage
+
 MAX_TOOL_ATTEMPTS = 2
 
 
@@ -63,6 +65,13 @@ class AttemptLog:
     def get_result(self, tool_name: str) -> dict | None:
         return self._results.get(tool_name)
 
+    def overwrite_result(self, tool_name: str, result: dict) -> None:
+        """Controller-only: replace the cached last-good result without recording
+        a fake attempt. Used solely by orchestration.py's remediation merge step,
+        to splice the regenerated S04 into the original 4-scenario set under the
+        "generate_scenarios" key so save_scenario_set's next call sees the merged set."""
+        self._results[tool_name] = result
+
     def as_dict(self) -> dict[str, list[dict[str, Any]]]:
         return {name: list(attempts) for name, attempts in self._attempts.items()}
 
@@ -100,6 +109,7 @@ def _run_with_attempt_cap(
 # ---------------------------------------------------------------------------
 
 REQUIRED_RULE_IDS = {f"BR0{n}" for n in range(1, 7)}
+AMBIGUITY_RULE_IDS = REQUIRED_RULE_IDS | {"GENERAL"}
 
 
 class RuleItem(BaseModel):
@@ -111,7 +121,7 @@ class RuleItem(BaseModel):
 
 class AmbiguityItem(BaseModel):
     id: str
-    rule_ids: list[str]
+    rule_id: str
     question: str
     critical: bool
     status: str
@@ -140,6 +150,13 @@ def _validate_interpretation(
                 f"requirement text: {rule['source_excerpt']!r}"
             )
 
+    for ambiguity in ambiguities:
+        if ambiguity["rule_id"] not in AMBIGUITY_RULE_IDS:
+            raise BedrockOutputError(
+                f"ambiguity {ambiguity['id']!r} has rule_id {ambiguity['rule_id']!r} -- must be "
+                f"one of BR01-BR06, or GENERAL if it genuinely spans multiple rules"
+            )
+
     return {
         "rules": [dict(rule) for rule in rules],
         "ambiguities": [dict(ambiguity) for ambiguity in ambiguities],
@@ -158,8 +175,9 @@ def build_interpret_requirement_tool(attempt_log: AttemptLog, requirement_text: 
                 source_excerpt (must be an exact substring of the requirement
                 text you were given), meaning, and expected_observations.
             ambiguities: Any ambiguities found in the requirement (may be
-                empty), each with id, rule_ids, question, critical, status,
-                and an optional human_response.
+                empty), each with id, rule_id (one of BR01-BR06, or GENERAL
+                if it genuinely spans multiple rules), question, critical,
+                status, and an optional human_response.
         """
 
         def _validate() -> dict:
@@ -249,3 +267,72 @@ def build_generate_scenarios_tool(attempt_log: AttemptLog, expected_target_ids: 
         return _run_with_attempt_cap(attempt_log, "generate_scenarios", _validate)
 
     return generate_scenarios
+
+
+def build_generate_missing_scenarios_tool(attempt_log: AttemptLog, expected_target_ids: list[str]):
+    """A separate tool, under its own name, for the remediation regeneration pass.
+
+    Deliberately not a second configuration of generate_scenarios: reusing
+    that tool name would make DeciderGuardrail re-run the AMBIGUITY+STRATEGY
+    checkpoint on the remediation call (checkpoints are keyed by tool name) --
+    a pointless, risky extra Decider call. This tool is never a checkpoints
+    key, so it is always ungated; the COVERAGE recheck on the next
+    save_scenario_set call still gates the merged result.
+    """
+
+    @tool
+    def generate_missing_scenarios(
+        target_ids: list[str], scenarios: list[ScenarioItem]
+    ) -> dict:
+        """Regenerate only the missing/invalid scenario(s) named in the remediation feedback.
+
+        Args:
+            target_ids: The scenario IDs to regenerate -- must exactly match
+                the IDs the controller requested (the ones the coverage
+                validator flagged as missing or invalid).
+            scenarios: One ScenarioItem per target_id, same shape as generate_scenarios.
+        """
+
+        def _validate() -> dict:
+            return _validate_scenario_set(target_ids, scenarios, expected_target_ids)
+
+        return _run_with_attempt_cap(attempt_log, "generate_missing_scenarios", _validate)
+
+    return generate_missing_scenarios
+
+
+# ---------------------------------------------------------------------------
+# F04 -- coverage scoring + persistence (docs/05_Data_Contracts.md Section 5)
+# ---------------------------------------------------------------------------
+
+
+def build_save_scenario_set_tool(attempt_log: AttemptLog, catalog: dict):
+    """Zero-argument tool: scores and persists whatever generate_scenarios last
+    produced, read straight from the shared AttemptLog. Avoids having the
+    model re-transcribe the whole scenario JSON as a second tool call's
+    arguments (risk of truncation/paraphrase drift). The COVERAGE checkpoint's
+    build_questions/build_state read the same AttemptLog, so both see
+    identically the same data by construction.
+    """
+
+    @tool
+    def save_scenario_set() -> dict:
+        """Score and persist the scenario set most recently produced by generate_scenarios.
+
+        Takes no arguments. Call this immediately after generate_scenarios succeeds.
+        """
+
+        def _validate() -> dict:
+            scenario_set = attempt_log.get_result("generate_scenarios")
+            if scenario_set is None:
+                raise BedrockOutputError(
+                    "save_scenario_set called before generate_scenarios succeeded"
+                )
+            coverage = compute_coverage(
+                scenario_set["scenarios"], catalog, scenario_set_version=scenario_set["version"]
+            )
+            return {"scenario_set": scenario_set, "coverage": coverage}
+
+        return _run_with_attempt_cap(attempt_log, "save_scenario_set", _validate)
+
+    return save_scenario_set

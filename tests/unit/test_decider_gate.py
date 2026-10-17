@@ -13,6 +13,8 @@ import pytest
 from strands.hooks.events import BeforeToolCallEvent
 from strands.interventions import Confirm, Deny, Guide, Proceed
 
+from strands.interrupt import Interrupt, _InterruptState
+
 from decider_gate.client import DeciderClient, DeciderError
 from decider_gate.gate import ConfidenceGate
 from decider_gate.intervention import CheckpointSpec, DeciderGuardrail
@@ -213,6 +215,47 @@ def test_guardrail_proceeds_on_unguarded_tool():
     assert isinstance(action, Proceed)
 
 
+def test_build_state_overrides_state_sent_to_decider():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.9}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+        build_state=lambda state: {"richer": "state", "raw_input": state},
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+    guardrail.before_tool_call(_make_event("guarded_tool", {"some": "input"}))
+
+    assert captured["body"]["state"] == {"richer": "state", "raw_input": {"some": "input"}}
+
+
+def test_build_state_defaults_to_raw_tool_input_when_absent():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.9}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+    guardrail.before_tool_call(_make_event("guarded_tool", {"some": "input"}))
+
+    assert captured["body"]["state"] == {"some": "input"}
+
+
 def test_guardrail_auto_true_resolves_via_checkpoint_spec():
     client = make_client(_noul_response_handler(0.9))
     spec = CheckpointSpec(
@@ -370,6 +413,88 @@ def test_guardrail_malformed_answer_missing_confidence_denies_and_fires_on_error
     assert isinstance(calls[0][1], KeyError)
 
 
+class _FakeAgent:
+    def __init__(self) -> None:
+        self._interrupt_state = _InterruptState()
+
+
+def test_guardrail_replay_after_resume_skips_decider_and_decision_record():
+    """Strands replays before_tool_call for the same toolUseId once a paused
+    run resumes (see decider_gate.intervention's module docstring). The
+    guardrail must resolve straight from the already-answered interrupt
+    instead of asking Decider again or firing on_decision a second time."""
+    call_count = {"n": 0}
+
+    def handler(request):
+        call_count["n"] += 1
+        return httpx.Response(
+            200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.55}}, "usage": {}}
+        )
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: pytest.fail("resolve must not be called on ESCALATE"),
+    )
+    calls = []
+    guardrail = DeciderGuardrail(
+        client=client,
+        gate=ConfidenceGate(),
+        checkpoints={"guarded_tool": spec},
+        host_label="local-cpu",
+        on_decision=lambda tool_name, verdicts, action: calls.append((tool_name, verdicts, action)),
+    )
+    agent = _FakeAgent()
+    tool_use = {"name": "guarded_tool", "input": {}, "toolUseId": "tool-use-42"}
+    first_event = BeforeToolCallEvent(agent=agent, selected_tool=None, tool_use=tool_use, invocation_state={})
+
+    first_action = guardrail.before_tool_call(first_event)
+
+    assert isinstance(first_action, Confirm)
+    assert call_count["n"] == 1
+    assert len(calls) == 1
+
+    # Simulate the human resuming "yes" for this exact (toolUseId, handler name) interrupt.
+    interrupt_id = first_event._interrupt_id(guardrail.name)
+    agent._interrupt_state.interrupts[interrupt_id] = Interrupt(id=interrupt_id, name=guardrail.name, response="yes")
+
+    # Strands replays the same tool_use as a fresh BeforeToolCallEvent after resume.
+    replay_event = BeforeToolCallEvent(agent=agent, selected_tool=None, tool_use=dict(tool_use), invocation_state={})
+    second_action = guardrail.before_tool_call(replay_event)
+
+    assert isinstance(second_action, Proceed)
+    assert call_count["n"] == 1  # Decider never called a second time
+    assert len(calls) == 1  # no new decision record
+
+
+def test_guardrail_replay_after_resume_denies_on_rejected_response():
+    def handler(request):
+        return httpx.Response(
+            200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.55}}, "usage": {}}
+        )
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: pytest.fail("resolve must not be called on ESCALATE"),
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+    agent = _FakeAgent()
+    tool_use = {"name": "guarded_tool", "input": {}, "toolUseId": "tool-use-77"}
+    first_event = BeforeToolCallEvent(agent=agent, selected_tool=None, tool_use=tool_use, invocation_state={})
+    guardrail.before_tool_call(first_event)
+
+    interrupt_id = first_event._interrupt_id(guardrail.name)
+    agent._interrupt_state.interrupts[interrupt_id] = Interrupt(id=interrupt_id, name=guardrail.name, response="no")
+    replay_event = BeforeToolCallEvent(agent=agent, selected_tool=None, tool_use=dict(tool_use), invocation_state={})
+
+    action = guardrail.before_tool_call(replay_event)
+
+    assert isinstance(action, Deny)
+
+
 def test_guardrail_deny_on_error_even_without_on_error_callback():
     def handler(request):
         raise httpx.ConnectError("refused")
@@ -384,3 +509,144 @@ def test_guardrail_deny_on_error_even_without_on_error_callback():
     )
     action = guardrail.before_tool_call(_make_event("guarded_tool"))
     assert isinstance(action, Deny)
+
+
+# -- decision reuse across toolUseIds (a retry, not Strands' own resume replay) --
+
+
+def _make_event_with_id(tool_name: str, tool_use_id: str, tool_input: dict | None = None) -> BeforeToolCallEvent:
+    return BeforeToolCallEvent(
+        agent=None,
+        selected_tool=None,
+        tool_use={"name": tool_name, "input": tool_input or {}, "toolUseId": tool_use_id},
+        invocation_state={},
+    )
+
+
+def test_guardrail_reuses_auto_decision_for_new_tool_use_id_with_same_state():
+    call_count = {"n": 0}
+
+    def handler(request):
+        call_count["n"] += 1
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.9}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+
+    first = guardrail.before_tool_call(_make_event_with_id("guarded_tool", "id-1", {"x": 1}))
+    second = guardrail.before_tool_call(_make_event_with_id("guarded_tool", "id-2", {"x": 1}))
+
+    assert isinstance(first, Proceed)
+    assert isinstance(second, Proceed)
+    assert call_count["n"] == 1  # same state -> no second Decider call
+
+
+def test_guardrail_changed_state_gets_a_fresh_decider_call():
+    call_count = {"n": 0}
+
+    def handler(request):
+        call_count["n"] += 1
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.9}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+    )
+    guardrail = DeciderGuardrail(
+        client=client, gate=ConfidenceGate(), checkpoints={"guarded_tool": spec}, host_label="local-cpu"
+    )
+
+    guardrail.before_tool_call(_make_event_with_id("guarded_tool", "id-1", {"x": 1}))
+    guardrail.before_tool_call(_make_event_with_id("guarded_tool", "id-2", {"x": 2}))
+
+    assert call_count["n"] == 2  # changed state -> second Decider call
+
+
+def test_guardrail_reuses_human_answer_for_a_retry_with_a_new_tool_use_id():
+    """Mirrors the live-run crash: an escalation gets a human answer via
+    Strands' own resume replay (same toolUseId), then the model retries the
+    same tool with a NEW toolUseId and the identical effective state -- that
+    retry must reuse the human's answer, never ask Decider or escalate again."""
+    call_count = {"n": 0}
+
+    def handler(request):
+        call_count["n"] += 1
+        return httpx.Response(200, json={"model": "m", "answers": {"q1": {"type": "noul", "noul": 0.55}}, "usage": {}})
+
+    client = make_client(handler)
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: pytest.fail("resolve must not be called on ESCALATE"),
+    )
+    reuse_calls = []
+    guardrail = DeciderGuardrail(
+        client=client,
+        gate=ConfidenceGate(),
+        checkpoints={"guarded_tool": spec},
+        host_label="local-cpu",
+        on_reuse=lambda tool_name, verdicts, action, origin: reuse_calls.append(
+            (tool_name, verdicts, action, origin)
+        ),
+    )
+    agent = _FakeAgent()
+    tool_use = {"name": "guarded_tool", "input": {"x": 1}, "toolUseId": "tool-use-1"}
+    first_event = BeforeToolCallEvent(agent=agent, selected_tool=None, tool_use=tool_use, invocation_state={})
+
+    first_action = guardrail.before_tool_call(first_event)
+    assert isinstance(first_action, Confirm)
+    assert call_count["n"] == 1
+
+    interrupt_id = first_event._interrupt_id(guardrail.name)
+    agent._interrupt_state.interrupts[interrupt_id] = Interrupt(id=interrupt_id, name=guardrail.name, response="yes")
+    replay_event = BeforeToolCallEvent(agent=agent, selected_tool=None, tool_use=dict(tool_use), invocation_state={})
+    replay_action = guardrail.before_tool_call(replay_event)
+    assert isinstance(replay_action, Proceed)
+    assert call_count["n"] == 1
+
+    retry_event = BeforeToolCallEvent(
+        agent=agent,
+        selected_tool=None,
+        tool_use={"name": "guarded_tool", "input": {"x": 1}, "toolUseId": "tool-use-2"},
+        invocation_state={},
+    )
+    retry_action = guardrail.before_tool_call(retry_event)
+
+    assert isinstance(retry_action, Proceed)
+    assert call_count["n"] == 1  # no second Decider call for the retry
+    assert len(reuse_calls) == 1
+    tool_name, verdicts, action, origin = reuse_calls[0]
+    assert tool_name == "guarded_tool"
+    assert verdicts["q1"].route == "ESCALATE"
+    assert isinstance(action, Proceed)
+    assert origin == "tool-use-1"
+
+
+def test_guardrail_on_call_fires_once_per_before_tool_call_pass():
+    client = make_client(_noul_response_handler(0.9))
+    spec = CheckpointSpec(
+        build_questions=lambda state: {"q1": {"type": "noul", "instructions": "x"}},
+        resolve=lambda verdicts: Proceed(),
+    )
+    calls = []
+    guardrail = DeciderGuardrail(
+        client=client,
+        gate=ConfidenceGate(),
+        checkpoints={"guarded_tool": spec},
+        host_label="local-cpu",
+        on_call=lambda tool_name, tool_use_id, action: calls.append((tool_name, tool_use_id, action)),
+    )
+
+    guardrail.before_tool_call(_make_event("unguarded_tool"))
+    guardrail.before_tool_call(_make_event_with_id("guarded_tool", "id-1"))
+    guardrail.before_tool_call(_make_event_with_id("guarded_tool", "id-2"))  # reused
+
+    assert [c[0] for c in calls] == ["unguarded_tool", "guarded_tool", "guarded_tool"]
+    assert [c[1] for c in calls] == ["test-id", "id-1", "id-2"]
+    assert all(isinstance(c[2], Proceed) for c in calls)
