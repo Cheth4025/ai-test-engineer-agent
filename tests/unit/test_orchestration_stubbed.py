@@ -342,3 +342,10 @@ def test_run_initial_pass_full_happy_path_through_remediation_reaches_five_of_fi
     # generate_scenarios AUTO, save_scenario_set ESCALATE, the human's REMEDIATE_GAP pick,
     # then save_scenario_set's AUTO re-check -- one record per checkpoint resolution.
     assert len(controller.decisions) == 4
+    # resume_pending_decision never calls set_stage(): Strands replays
+    # before_tool_call for the escalated save_scenario_set toolUseId against
+    # whatever stage was active when it paused (SCORING), so StageGuard must
+    # still allow it on resume. Zero stage_violations proves the replay was
+    # never mistaken for an out-of-stage call.
+    assert controller.stage_violations == []
+    assert not (controller.run_dir / "stage_violations.json").exists()
