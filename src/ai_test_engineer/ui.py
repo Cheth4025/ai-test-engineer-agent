@@ -56,6 +56,8 @@ from ai_test_engineer.state import RunController
 
 CONFIG_DIR = orchestration.CONFIG_DIR
 
+APP_TITLE = "Assurance Agent Experience"
+
 # (nav id, label, Material icon name). IDs are stable identifiers used for
 # st.session_state/keys; labels are what's shown. docs/mockups/README.md
 # row 1 (owner-approved layout change): icon + label nav, not tabs/radio.
@@ -435,9 +437,18 @@ def split_shared_assertions(
 
 def format_assertion(assertion: dict) -> str:
     """A real required_assertions tuple rendered compactly -- real data
-    only, no invented short phrase (resolved with the user)."""
-    operator = "precedes" if assertion["operator"] == "PRECEDES" else "=="
-    return f"{assertion['observation']} {operator} {assertion['expected']}"
+    only, no invented short phrase (resolved with the user). PRECEDES has
+    exactly one real instance in the catalog (status_verification_before_
+    retry_charge PRECEDES True) and reads as "<observation> precedes True"
+    otherwise, which is meaningless to a reader -- rendered as the plain-
+    English phrase instead. Booleans show as true/false (Python's True/
+    False, not this)."""
+    if assertion["operator"] == "PRECEDES":
+        return "verified before retry charge"
+    expected = assertion["expected"]
+    if isinstance(expected, bool):
+        expected = "true" if expected else "false"
+    return f"{assertion['observation']} == {expected}"
 
 
 def coverage_action_confidence(record: dict) -> float | None:
@@ -497,6 +508,52 @@ def decider_decision_value(record: dict) -> str:
         if question.get("question") == "coverage_action" and question.get("answer") is not None:
             return question["answer"]
     return "Awaiting human"
+
+
+def decision_icon(record: dict) -> str:
+    """⏳ while a decision is still awaiting a human, ✅ once it's answered
+    or auto-resolved, ⛔ when a human's answer was rejected by a guard --
+    derived from decider_decision_value's own classification (never a
+    second, independently-drifting set of rules for the same record)."""
+    value = decider_decision_value(record)
+    if value.startswith("Rejected by guard"):
+        return "⛔"
+    if value == "Awaiting human":
+        return "⏳"
+    return "✅"
+
+
+def sidebar_pending_action(controller: RunController | None) -> dict | None:
+    """The one pending human action the sidebar notice should name:
+    {"kind": "decision"|"approval", "section_id": <nav id>}, or None. A
+    pending Confirm-decision escalation takes priority over
+    AWAITING_APPROVAL -- the two stages are mutually exclusive in practice
+    (escalating sets stage to AWAITING_DECISION_CONFIRMATION, not
+    AWAITING_APPROVAL), but checking decision first keeps this correct even
+    if that ever changes. Exactly one result, never both at once."""
+    if controller is None:
+        return None
+    if controller.pending_decision is not None:
+        section_id = PENDING_SECTION_FOR_TOOL.get(controller.pending_decision.get("tool_name"))
+        if section_id is not None:
+            return {"kind": "decision", "section_id": section_id}
+    if controller.workflow_state == "AWAITING_APPROVAL":
+        return {"kind": "approval", "section_id": "execution"}
+    return None
+
+
+def pending_action(controller: RunController | None, versions: list[dict] | None = None) -> dict | None:
+    """sidebar_pending_action's two cases, plus a third fallback the page
+    banners (but not the sidebar notice) also surface: an unresolved
+    grounding flag on the LATEST scenario version -- an optional review
+    step, not a run-blocking one, so it's the lowest priority of the
+    three."""
+    action = sidebar_pending_action(controller)
+    if action is not None:
+        return action
+    if versions and versions[-1].get("unresolved_grounding"):
+        return {"kind": "grounding", "section_id": "scenarios"}
+    return None
 
 
 def _host_label() -> str:
@@ -590,20 +647,24 @@ def gather_display_data(state: UIState) -> dict:
 # automatically -- stacking CSS padding-top on top of that would double it.
 # Side padding and max-width have no native theme equivalent, so those are
 # CSS here, per the explicit "CSS only" layout-tightening request.
-_BASE_CSS = """
+_BASE_CSS_TEMPLATE = """
 <style>
 [data-testid="stHeader"] {
     background-color: #0F1B2D;
 }
+/* left: 0 -- flush with the sidebar's own left edge, not offset past the
+   sidebar-collapse arrow (which lives inside the sidebar panel in this
+   Streamlit build, not in the header, so there's nothing in the header to
+   leave room for). */
 [data-testid="stHeader"]::before {
-    content: "AI Test Engineer Agent";
+    content: "__APP_TITLE__";
     position: absolute;
-    left: 1rem;
+    left: 0;
     top: 50%;
     transform: translateY(-50%);
     color: #F5F5F5;
-    font-size: 1.15rem;
-    font-weight: 600;
+    font-size: 22px;
+    font-weight: 700;
     white-space: nowrap;
 }
 .aite-status-chips {
@@ -709,6 +770,11 @@ _BASE_CSS = """
 }
 </style>
 """
+_BASE_CSS = _BASE_CSS_TEMPLATE.replace("__APP_TITLE__", APP_TITLE)
+
+
+def _page_config_kwargs() -> dict:
+    return {"page_title": APP_TITLE, "layout": "wide"}
 
 
 def _nav_css(current_nav_id: str) -> str:
@@ -775,16 +841,60 @@ def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
         if state.last_error:
             st.error(f"Last run failed: {state.last_error}")
 
-        if controller is not None and controller.pending_decision is not None:
-            target_id = PENDING_SECTION_FOR_TOOL.get(controller.pending_decision.get("tool_name"))
-            if target_id is not None:
-                st.warning(f"A decision needs your confirmation — see '{NAV_LABELS[target_id]}'.")
+        action = sidebar_pending_action(controller)
+        if action is not None:
+            label = NAV_LABELS[action["section_id"]]
+            if action["kind"] == "decision":
+                st.warning(f"A decision needs your confirmation — see '{label}'.")
+            else:
+                st.warning(f"Approval needed — see '{label}'.")
     return current_nav_id
 
 
 def _render_page_header(title: str) -> None:
     st.title(title)
     st.caption("Payment Retry & Duplicate Charge Prevention")
+
+
+_ACTION_ANCHOR_ID = "aite-action-anchor"
+
+_ACTION_VERB = {
+    "decision": "confirm the Decider decision",
+    "grounding": "resolve the grounding flag",
+    "approval": "record the approval decision",
+}
+
+
+def _render_action_anchor() -> None:
+    """A same-page scroll target right before the control a pending
+    action's banner link jumps to. Each of the three controls
+    (_render_confirm_decision, the grounding-resolution forms, the Human
+    approval card) only renders this when it is ALSO the one pending_action
+    currently names -- never unconditionally -- so at most one element on
+    the page ever carries this id."""
+    st.markdown(f'<div id="{_ACTION_ANCHOR_ID}"></div>', unsafe_allow_html=True)
+
+
+def _render_action_banner(data: dict, current_section_id: str) -> None:
+    """Top-of-page notice naming the one pending human action (see
+    pending_action's priority order) so it's never missed just because the
+    user is looking at a different page. On the page that actually hosts
+    the control, it's a same-page "Jump to it" anchor link; everywhere
+    else, a button that switches to that page (there's no URL to deep-link
+    to -- navigation is plain session_state, not routing)."""
+    controller: RunController | None = data["controller"]
+    action = pending_action(controller, data.get("versions"))
+    if action is None:
+        return
+    verb = _ACTION_VERB[action["kind"]]
+    if action["section_id"] == current_section_id:
+        st.warning(f"Action needed below: {verb}. [Jump to it](#{_ACTION_ANCHOR_ID})")
+        return
+    label = NAV_LABELS[action["section_id"]]
+    st.warning(f"Action needed: {verb} — see '{label}'.")
+    if st.button(f"Go to {label}", key="jump_to_action_page"):
+        st.session_state["nav_id"] = action["section_id"]
+        st.rerun()
 
 
 def _card_heading(text: str, *, prefix: str = "") -> None:
@@ -799,6 +909,7 @@ def _card_heading(text: str, *, prefix: str = "") -> None:
 
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
     pending = controller.pending_decision
+    _render_action_anchor()  # whenever this renders, pending_action always names "decision" here
     st.subheader("Confirm decision")
     st.caption(f"checkpoint tool: {pending['tool_name']}")
     for name, fields in pending["verdicts"].items():
@@ -898,6 +1009,7 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
     header_col, button_col = st.columns([4, 1], vertical_alignment="center")
     with header_col:
         _render_page_header("Overview")
+    _render_action_banner(data, "requirements")
     with button_col:
         label = "New Analysis" if state.current_run_id is not None else "Start analysis"
         if st.button(
@@ -958,7 +1070,21 @@ def _render_coverage_donut(coverage: dict, caption: str) -> None:
     covered = coverage["covered"]
     required = coverage["required"]
     missing = max(required - covered, 0)
-    frame = pd.DataFrame({"category": ["Covered", "Missing"], "count": [covered, missing]})
+    # A "label" column carries the exact tooltip text ("Covered: 4") --
+    # without an explicit tooltip encoding, Altair's default tooltip shows
+    # every raw encoded field (count, category, and the auto-generated
+    # _category_sort_index), which is meaningless to a reader. The legend
+    # is dropped entirely (not placed below) rather than fought with for
+    # space -- the caption below already names covered/required, and a
+    # fixed-height chart can't both show the full ring AND grow to fit a
+    # legend without clipping one or the other.
+    frame = pd.DataFrame(
+        {
+            "category": ["Covered", "Missing"],
+            "count": [covered, missing],
+            "label": [f"Covered: {covered}", f"Missing: {missing}"],
+        }
+    )
     arc = (
         alt.Chart(frame)
         .mark_arc(innerRadius=55, outerRadius=85)
@@ -967,8 +1093,9 @@ def _render_coverage_donut(coverage: dict, caption: str) -> None:
             color=alt.Color(
                 "category:N",
                 scale=alt.Scale(domain=["Covered", "Missing"], range=["#0D9488", "#FCA5A5"]),
-                legend=alt.Legend(title=None, orient="bottom"),
+                legend=None,
             ),
+            tooltip=alt.Tooltip("label:N", title=None),
         )
     )
     center_text = (
@@ -976,7 +1103,9 @@ def _render_coverage_donut(coverage: dict, caption: str) -> None:
         .mark_text(size=22, fontWeight="bold")
         .encode(text="text:N")
     )
-    st.altair_chart(alt.layer(arc, center_text).properties(width=170, height=170))
+    # 200x200 around an outerRadius=85 (170px diameter) ring -- 15px
+    # clearance on every side so the ring is never clipped at the edge.
+    st.altair_chart(alt.layer(arc, center_text).properties(width=200, height=200))
     st.caption(f"{caption} · {covered} of {required}")
 
 
@@ -1003,6 +1132,7 @@ def _render_scenarios_table(scenarios: list[dict], grounding_items: dict, added_
 
 def _render_page_scenarios(state: UIState, data: dict) -> None:
     _render_page_header("Scenarios")
+    _render_action_banner(data, "scenarios")
     controller: RunController | None = data["controller"]
     versions_list = data.get("versions", [])
     if controller is None or not versions_list:
@@ -1042,7 +1172,10 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
             st.caption(f"From scenarios_v{selected_version}.json.")
 
         if selected_version == latest_version:
-            for scenario_id in entry["unresolved_grounding"]:
+            current_action = pending_action(controller, versions_list)
+            for index, scenario_id in enumerate(entry["unresolved_grounding"]):
+                if index == 0 and current_action is not None and current_action["kind"] == "grounding":
+                    _render_action_anchor()
                 with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
                     st.write(f"Resolve grounding flag for {scenario_id}")
                     # index=None (same fix as the Confirm decision radio
@@ -1120,12 +1253,12 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                 )
         if coverage_decisions:
             with decider_col, st.container(border=True):
-                _card_heading("Strands Decider (2B) decision", prefix="✅")
+                _card_heading("Strands Decider (2B) decision")
                 choice_threshold = round4(_choice_threshold())
                 for record in coverage_decisions:
                     source = record.get("decision_source")
                     st.markdown(f"Checkpoint: `{record.get('checkpoint')}`")
-                    st.markdown(f"Decision: `{decider_decision_value(record)}`")
+                    st.markdown(f"{decision_icon(record)} Decision: `{decider_decision_value(record)}`")
                     # The coverage_action question's OWN confidence vs the
                     # per-choice gate (τ 0.75), not the record's top-level
                     # confidence/threshold (the batch's lowest-scoring
@@ -1174,6 +1307,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
 def _render_page_execution(state: UIState, data: dict) -> None:
     _render_page_header("Execution")
     st.caption("Approve, then execute the five fixed tests.")
+    _render_action_banner(data, "execution")
     controller: RunController | None = data["controller"]
 
     col1, col2 = st.columns(2)
@@ -1234,6 +1368,8 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             # match the buttons' own lock. Same reason, same caption, now
             # for both.
             execution_unlocked = controller is not None and controller.workflow_state == "AWAITING_APPROVAL"
+            if execution_unlocked:
+                _render_action_anchor()
             if controller is None:
                 blockers = ["No run yet."]
             elif not execution_unlocked:
@@ -1294,6 +1430,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
 
 def _render_page_results(state: UIState, data: dict) -> None:
     _render_page_header("Results")
+    _render_action_banner(data, "results")
     st.info("Results appear after the tests run (Milestone 6).")
 
 
@@ -1306,7 +1443,7 @@ _NAV_RENDERERS = {
 
 
 def main() -> None:
-    st.set_page_config(page_title="AI Test Engineer Agent", layout="wide")
+    st.set_page_config(**_page_config_kwargs())
     state = get_ui_state()
 
     # One fragment for the whole page (top-bar chips + sidebar + the

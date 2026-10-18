@@ -684,8 +684,20 @@ def test_format_assertion_eq_operator():
 
 
 def test_format_assertion_precedes_operator():
+    """PRECEDES is rendered as a plain-English phrase, never
+    "<observation> precedes True" -- resolved with the user."""
     assertion = {"observation": "status_verification_before_retry_charge", "operator": "PRECEDES", "expected": True}
-    assert ui.format_assertion(assertion) == "status_verification_before_retry_charge precedes True"
+    assert ui.format_assertion(assertion) == "verified before retry charge"
+
+
+def test_format_assertion_eq_operator_boolean_true_lowercased():
+    assertion = {"observation": "timeout_not_failed", "operator": "EQ", "expected": True}
+    assert ui.format_assertion(assertion) == "timeout_not_failed == true"
+
+
+def test_format_assertion_eq_operator_boolean_false_lowercased():
+    assertion = {"observation": "conflict_rejected", "operator": "EQ", "expected": False}
+    assert ui.format_assertion(assertion) == "conflict_rejected == false"
 
 
 def test_decider_decision_value_human_escalation_uses_selected_action_directly():
@@ -766,3 +778,128 @@ def test_round4_probabilities_rounds_each_value():
         "true": 0.4188,
         "false": 0.5812,
     }
+
+
+# ---------------------------------------------------------------------------
+# decision_icon -- the Decision card's ⏳/✅/⛔ icon, derived from the same
+# status decider_decision_value already classifies (never a second,
+# independently-drifting set of rules).
+# ---------------------------------------------------------------------------
+
+
+def test_decision_icon_awaiting_human():
+    record = {
+        "decision_source": "DECIDER",
+        "selected_action": "Confirm",
+        "per_question": [{"question": "coverage_action", "answer": None}],
+    }
+    assert ui.decision_icon(record) == "⏳"
+
+
+def test_decision_icon_rejected_by_guard():
+    record = {
+        "decision_source": "HUMAN_ESCALATION",
+        "selected_action": "ACCEPT_COVERAGE",
+        "decision_status": "REJECTED",
+        "rejection_reason": "5/5 required",
+        "per_question": [],
+    }
+    assert ui.decision_icon(record) == "⛔"
+
+
+def test_decision_icon_human_escalation_answered():
+    record = {"decision_source": "HUMAN_ESCALATION", "selected_action": "REMEDIATE_GAP", "per_question": []}
+    assert ui.decision_icon(record) == "✅"
+
+
+def test_decision_icon_decider_auto_resolved():
+    record = {
+        "decision_source": "DECIDER",
+        "selected_action": "Proceed",
+        "per_question": [{"question": "coverage_action", "answer": "ACCEPT_COVERAGE"}],
+    }
+    assert ui.decision_icon(record) == "✅"
+
+
+# ---------------------------------------------------------------------------
+# pending_action / sidebar_pending_action -- the single pending human action
+# to surface across the sidebar notice and page banners. Priority order: an
+# open Confirm-decision escalation (the run is fully paused on it) beats
+# AWAITING_APPROVAL (blocks progress, but the run isn't paused) beats an
+# unresolved grounding flag on the latest scenario version (optional
+# review). At most one is ever returned -- "exactly one notice at a time".
+# ---------------------------------------------------------------------------
+
+
+def _controller_with_pending_decision(tmp_path, tool_name: str = "save_scenario_set") -> RunController:
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    controller.set_pending_decision({"tool_name": tool_name, "context": {}, "verdicts": {}})
+    return controller
+
+
+def test_sidebar_pending_action_none_when_no_controller():
+    assert ui.sidebar_pending_action(None) is None
+
+
+def test_sidebar_pending_action_decision_points_at_scenarios(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "scenarios"}
+
+
+def test_sidebar_pending_action_decision_points_at_requirements(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "generate_scenarios")
+    assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "requirements"}
+
+
+def test_sidebar_pending_action_approval(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    assert ui.sidebar_pending_action(controller) == {"kind": "approval", "section_id": "execution"}
+
+
+def test_sidebar_pending_action_none_when_nothing_pending(tmp_path):
+    controller = RunController("r1", tmp_path)  # PREPARING, no pending decision
+    assert ui.sidebar_pending_action(controller) is None
+
+
+def test_pending_action_falls_back_to_grounding_when_latest_version_has_unresolved_flags(tmp_path):
+    controller = RunController("r1", tmp_path)  # PREPARING, no pending decision
+    versions = [{"version": 1, "unresolved_grounding": ["S03"]}]
+    assert ui.pending_action(controller, versions) == {"kind": "grounding", "section_id": "scenarios"}
+
+
+def test_pending_action_ignores_grounding_on_an_older_version(tmp_path):
+    controller = RunController("r1", tmp_path)
+    versions = [{"version": 1, "unresolved_grounding": ["S03"]}, {"version": 2, "unresolved_grounding": []}]
+    assert ui.pending_action(controller, versions) is None
+
+
+def test_pending_action_decision_beats_grounding(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    versions = [{"version": 1, "unresolved_grounding": ["S03"]}]
+    assert ui.pending_action(controller, versions) == {"kind": "decision", "section_id": "scenarios"}
+
+
+def test_pending_action_none_when_nothing_pending(tmp_path):
+    controller = RunController("r1", tmp_path)
+    assert ui.pending_action(controller, []) is None
+    assert ui.pending_action(None, []) is None
+
+
+# ---------------------------------------------------------------------------
+# Top-bar title: "Assurance Agent Experience", not the old name.
+# ---------------------------------------------------------------------------
+
+
+def test_app_title_is_assurance_agent_experience():
+    assert ui.APP_TITLE == "Assurance Agent Experience"
+
+
+def test_base_css_carries_the_new_title_and_not_the_old_one():
+    assert ui.APP_TITLE in ui._BASE_CSS
+    assert "AI Test Engineer Agent" not in ui._BASE_CSS
+
+
+def test_page_config_kwargs_use_the_new_title():
+    assert ui._page_config_kwargs()["page_title"] == ui.APP_TITLE

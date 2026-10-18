@@ -301,7 +301,83 @@ def test_sidebar_shows_notice_pointing_to_page_with_pending_decision(monkeypatch
     at = _settle(at, lambda a: any("Scenarios" in w.value for w in a.sidebar.warning))
 
     assert not at.exception
-    assert any("Scenarios" in w.value for w in at.sidebar.warning)
+    assert any(
+        w.value == "A decision needs your confirmation — see 'Scenarios'." for w in at.sidebar.warning
+    )
+
+
+def test_sidebar_shows_approval_notice_when_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _settle(at, lambda a: any("Approval needed" in w.value for w in a.sidebar.warning))
+
+    assert not at.exception
+    assert any(w.value == "Approval needed — see 'Execution'." for w in at.sidebar.warning)
+    # Exactly one notice -- never both the decision and approval wording at once.
+    assert not any("A decision needs your confirmation" in w.value for w in at.sidebar.warning)
+
+
+# ---------------------------------------------------------------------------
+# Action banners -- a top-of-page "Action needed" notice, present only
+# while a human action is actually pending, on the page that hosts the
+# control (same-page "Jump to it" link) and on Overview (a "Go to <page>"
+# button, since Overview itself doesn't host anything).
+# ---------------------------------------------------------------------------
+
+
+def test_no_action_banner_anywhere_before_any_run(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+
+    for nav_id in ("requirements", "scenarios", "execution", "results"):
+        at = _navigate(at, nav_id)
+        assert not any("Action needed" in w.value for w in at.warning)
+
+
+def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "scenarios")
+    at = _settle(at, lambda a: any("Action needed below" in w.value for w in a.warning))
+
+    assert any("confirm the Decider decision" in w.value and "Jump to it" in w.value for w in at.warning)
+
+    at = _navigate(at, "requirements")
+    assert any(
+        "Action needed" in w.value and "see 'Scenarios'" in w.value for w in at.warning
+    )
+    assert any(b.label == "Go to Scenarios" for b in at.button)
+
+
+def test_action_banner_on_overview_for_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "requirements")
+    at = _settle(at, lambda a: any("Action needed" in w.value for w in a.warning))
+
+    assert any(
+        "record the approval decision" in w.value and "see 'Execution'" in w.value for w in at.warning
+    )
+    assert any(b.label == "Go to Execution" for b in at.button)
+
+    at = _navigate(at, "execution")
+    assert any(
+        "Action needed below" in w.value and "record the approval decision" in w.value for w in at.warning
+    )
 
 
 def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
