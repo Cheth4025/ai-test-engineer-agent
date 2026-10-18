@@ -219,10 +219,10 @@ def test_approval_and_results_placeholders_before_any_run(monkeypatch, tmp_path,
     assert any("Start analysis to generate scenarios." in i.value for i in at.info)
 
     at = _navigate(at, "execution")
-    assert any("Results appear here after execution (Milestone 6)." in i.value for i in at.info)
+    assert any("Results appear here after execution." in i.value for i in at.info)
 
     at = _navigate(at, "results")
-    assert any("Results appear after the tests run (Milestone 6)." in i.value for i in at.info)
+    assert any("Results appear after the tests run." in i.value for i in at.info)
 
 
 # ---------------------------------------------------------------------------
@@ -858,7 +858,7 @@ def test_execution_approve_writes_approval_json_once_and_locks_both_buttons(monk
     assert not any(t.label == "Reviewer name" for t in at.text_input)
 
 
-def test_execution_execute_always_disabled_even_after_approval(monkeypatch, tmp_path, ui_script_path):
+def test_execution_execute_unlocks_after_approval(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_remediated_run(tmp_path)
 
@@ -872,8 +872,8 @@ def test_execution_execute_always_disabled_even_after_approval(monkeypatch, tmp_
     next(t for t in at.text_input if t.label == "Reviewer name").set_value("Chethan").run()
     next(b for b in at.button if b.label == "Approve").click().run()
 
-    assert next(b for b in at.button if b.label == "Execute").disabled is True
-    assert any("Milestone 6" in c.value for c in at.caption)
+    assert next(b for b in at.button if b.label == "Execute").disabled is False
+    assert any("Ready to run the five fixed tests." in c.value for c in at.caption)
 
 
 def test_execution_shows_fixed_manifest_with_real_expected_assertions(monkeypatch, tmp_path, ui_script_path):

@@ -40,10 +40,12 @@ forever.
 from __future__ import annotations
 
 import html
+import io
 import json
 import statistics
 import threading
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -51,7 +53,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from ai_test_engineer import checkpoints, orchestration
+from ai_test_engineer import checkpoints, orchestration, reporting
 from ai_test_engineer.state import RunController
 
 CONFIG_DIR = orchestration.CONFIG_DIR
@@ -75,15 +77,19 @@ NAV_LABELS = {item_id: label for item_id, label, _icon in NAV_ITEMS}
 PENDING_SECTION_FOR_TOOL = {
     "generate_scenarios": "requirements",
     "save_scenario_set": "scenarios",
+    "finalize_analysis": "execution",
+    "render_report": "execution",
 }
 
-# Doc 06's two escalation checkpoints and their fixed option sets -- same
-# mapping scripts/run_initial_pass.py._options_for hardcodes. Presentation
-# only (which buttons to draw), not business logic, so duplicating this tiny
+# Doc 06's escalation checkpoints and their fixed option sets -- same mapping
+# scripts/run_initial_pass.py._options_for hardcodes. Presentation only
+# (which buttons to draw), not business logic, so duplicating this tiny
 # mapping here is cheaper than threading it through orchestration.py.
 OPTIONS_FOR_TOOL: dict[str, list[str]] = {
     "save_scenario_set": ["ACCEPT_COVERAGE", "REMEDIATE_GAP"],
     "generate_scenarios": ["GENERATE_TESTS", "REQUEST_CLARIFICATION"],
+    "finalize_analysis": ["INVESTIGATE_FAILURE", "REPORT_FAILURE"],
+    "render_report": ["FINALIZE_RESULTS", "NOT_READY"],
 }
 
 TERMINAL_WORKFLOW_STATES = {"COMPLETED", "REJECTED", "BLOCKED", "STOPPED"}
@@ -174,6 +180,16 @@ def can_reject(state: UIState, controller: RunController | None, reviewer: str) 
     if (controller.run_dir / "approval.json").exists():
         return False
     return bool(reviewer and reviewer.strip())
+
+
+def can_execute(state: UIState, controller: RunController | None) -> bool:
+    """Mirrors RunController.use_execution()/execute_approved_run's own
+    guard (the real, data-layer enforcement) so the UI can disable a doomed
+    click -- never the only guard. A second Execute is refused at the data
+    layer regardless of this function's answer."""
+    if controller is None or state.worker_busy:
+        return False
+    return controller.workflow_state == "APPROVED" and not controller.execution_started
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +305,24 @@ def confirm_decision(state: UIState, choice: str) -> bool:
     thread = threading.Thread(
         target=_run_worker,
         args=(state, lambda: orchestration.resume_pending_decision(run_id, choice), known_before),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+def execute_run(state: UIState) -> bool:
+    with state.lock:
+        controller = current_controller(state)
+        if not can_execute(state, controller):
+            return False
+        state.worker_busy = True
+        state.last_error = None
+        run_id = state.current_run_id
+    known_before = frozenset(orchestration._ACTIVE_RUNS.keys())
+    thread = threading.Thread(
+        target=_run_worker,
+        args=(state, lambda: orchestration.execute_approved_run(run_id), known_before),
         daemon=True,
     )
     thread.start()
@@ -469,6 +503,37 @@ def coverage_action_confidence(record: dict) -> float | None:
     return None
 
 
+def primary_choice_confidence(record: dict) -> float | None:
+    """Same idea as coverage_action_confidence, generalized to whichever
+    primary choice question this record's checkpoint asked (STRATEGY/
+    COVERAGE/FAILURE/COMPLETION) -- for the Results page's Decider decision
+    trace, which spans every checkpoint, not just COVERAGE."""
+    for question in record.get("per_question") or []:
+        if question.get("question") in PRIMARY_CHOICE_QUESTIONS:
+            return question.get("confidence")
+    return None
+
+
+def build_evidence_zip(run_dir: Path) -> bytes | None:
+    """An in-memory zip of the run folder's own JSON/log/xml/md files, built
+    fresh at click time from files that already exist on disk -- never
+    written to the run folder, never regenerates or reruns anything. Owner-
+    approved deviation from docs/06's download-guard row and docs/mockups/
+    README.md deviation #10 (both specify individual-file downloads only,
+    no zip) -- recorded in the PR description, not in the docs themselves.
+    Returns None when the run folder has nothing to bundle yet."""
+    if not run_dir.exists():
+        return None
+    paths = sorted(p for p in run_dir.rglob("*") if p.is_file() and p.suffix in {".json", ".log", ".xml", ".md"})
+    if not paths:
+        return None
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in paths:
+            archive.write(path, arcname=str(path.relative_to(run_dir)))
+    return buffer.getvalue()
+
+
 def round4(value: float | None) -> float | None:
     """Confidence/probability values round-trip through JSON as raw floats
     (e.g. 0.41879999999999995) -- rounds for display only, never for
@@ -480,23 +545,30 @@ def round4_probabilities(probabilities: dict | None) -> dict:
     return {key: round4(value) for key, value in (probabilities or {}).items()}
 
 
+# Every checkpoint in this codebase names its human-facing bounded choice
+# question "<noun>_action" -- the one question whose real answer is the
+# decision, as opposed to the gate's own internal action name ("Confirm"/
+# "Proceed") that selected_action carries for a DECIDER/REUSED record.
+PRIMARY_CHOICE_QUESTIONS = {"strategy_action", "coverage_action", "failure_action", "completion_action"}
+
+
 def decider_decision_value(record: dict) -> str:
     """The real bounded-action choice (e.g. ACCEPT_COVERAGE/REMEDIATE_GAP)
-    for one decisions.json COVERAGE record, as the Decision line should
-    read it -- never the gate's own internal "Confirm" action name, and
-    never a normal-looking choice for a pick a guard actually rejected
-    (live-run evidence: a human's "ACCEPT_COVERAGE" pick while coverage was
-    4/5 was REJECTED by the 5/5 guard, but the old version of this function
-    would have shown it as a plain, accepted "ACCEPT_COVERAGE" decision).
+    for one decisions.json record, as the Decision line should read it --
+    never the gate's own internal "Confirm" action name, and never a
+    normal-looking choice for a pick a guard actually rejected (live-run
+    evidence: a human's "ACCEPT_COVERAGE" pick while coverage was 4/5 was
+    REJECTED by the 5/5 guard, but the old version of this function would
+    have shown it as a plain, accepted "ACCEPT_COVERAGE" decision).
 
     - decision_status == "REJECTED": "Rejected by guard: <reason>".
     - decision_source == "HUMAN_ESCALATION": the human's literal choice
       (selected_action already IS that string) with " (human)" appended.
-    - DECIDER/REUSED whose coverage_action question is still unanswered
+    - DECIDER/REUSED whose primary choice question is still unanswered
       (per_question's "answer" is None -- the escalation-moment record,
       where selected_action is just the gate's "Confirm" action name, not
       a real choice): "Awaiting human", not "Confirm".
-    - DECIDER/REUSED with an answered coverage_action (resolved AUTO, no
+    - DECIDER/REUSED with an answered primary choice (resolved AUTO, no
       escalation needed for that question even though the batch escalated
       overall): that real answer.
     """
@@ -505,7 +577,7 @@ def decider_decision_value(record: dict) -> str:
     if record.get("decision_source") == "HUMAN_ESCALATION":
         return f"{record.get('selected_action') or '—'} (human)"
     for question in record.get("per_question") or []:
-        if question.get("question") == "coverage_action" and question.get("answer") is not None:
+        if question.get("question") in PRIMARY_CHOICE_QUESTIONS and question.get("answer") is not None:
             return question["answer"]
     return "Awaiting human"
 
@@ -539,6 +611,8 @@ def sidebar_pending_action(controller: RunController | None) -> dict | None:
             return {"kind": "decision", "section_id": section_id}
     if controller.workflow_state == "AWAITING_APPROVAL":
         return {"kind": "approval", "section_id": "execution"}
+    if controller.workflow_state == "APPROVED" and not controller.execution_started:
+        return {"kind": "execute_ready", "section_id": "execution"}
     return None
 
 
@@ -625,6 +699,9 @@ def gather_display_data(state: UIState) -> dict:
     data["versions"] = versions
     data["scenarios_final"] = _load_json(run_dir / "scenarios_final.json")
     data["coverage_final"] = _load_json(run_dir / "coverage_final.json")
+    data["results"] = _load_json(run_dir / "results.json")
+    data["analysis"] = _load_json(run_dir / "analysis.json")
+    data["report_metadata"] = _load_json(run_dir / "report_metadata.json")
     return data
 
 
@@ -846,8 +923,10 @@ def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
             label = NAV_LABELS[action["section_id"]]
             if action["kind"] == "decision":
                 st.warning(f"A decision needs your confirmation — see '{label}'.")
-            else:
+            elif action["kind"] == "approval":
                 st.warning(f"Approval needed — see '{label}'.")
+            else:
+                st.warning(f"Ready to execute — see '{label}'.")
     return current_nav_id
 
 
@@ -862,6 +941,7 @@ _ACTION_VERB = {
     "decision": "confirm the Decider decision",
     "grounding": "resolve the grounding flag",
     "approval": "record the approval decision",
+    "execute_ready": "run the approved tests",
 }
 
 
@@ -1350,15 +1430,31 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             )
             if approval.get("comment"):
                 st.caption(f"Comment: {approval['comment']}")
+            execute_ready = can_execute(state, controller)
+            if execute_ready:
+                _render_action_anchor()
             button_cols = st.columns(3)
             button_cols[0].button("Reject", key="reject_btn", icon=":material/lock:", disabled=True)
             button_cols[1].button(
                 "Approve", type="primary", key="approve_btn", icon=":material/lock:", disabled=True
             )
-            button_cols[2].button(
-                "Execute", type="primary", key="execute_btn", icon=":material/lock:", disabled=True
-            )
-            st.caption("Test execution arrives in Milestone 6.")
+            with button_cols[2]:
+                execute_clicked = st.button(
+                    "Execute",
+                    type="primary",
+                    key="execute_btn",
+                    icon=None if execute_ready else ":material/lock:",
+                    disabled=not execute_ready,
+                )
+            if controller is not None and controller.execution_started:
+                st.caption(f"Execution status: {controller.workflow_state}.")
+            elif execute_ready:
+                st.caption("Ready to run the five fixed tests.")
+            else:
+                st.caption("Execute unlocks once the run reaches APPROVED.")
+            if execute_clicked:
+                execute_run(state)
+                st.rerun()
         else:
             versions_list = data.get("versions", [])
             latest_version = versions_list[-1]["version"] if versions_list else None
@@ -1407,7 +1503,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                 )
             with button_cols[2]:
                 st.button("Execute", type="primary", key="execute_btn", icon=":material/lock:", disabled=True)
-            st.caption("Test execution arrives in Milestone 6.")
+            st.caption("Execute unlocks once the run reaches APPROVED.")
 
             if reject_clicked and controller is not None and latest_version is not None:
                 with state.lock:
@@ -1418,20 +1514,162 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                     controller.record_approval("APPROVE", reviewer, latest_version, comment or None)
                 st.rerun()
 
-    with st.container(border=True):
+    if (
+        controller is not None
+        and controller.pending_decision is not None
+        and controller.pending_decision.get("tool_name") in ("finalize_analysis", "render_report")
+    ):
+        _render_confirm_decision(state, controller)
+
+    results = data.get("results")
+    run_col, log_col = st.columns(2)
+    with run_col, st.container(border=True):
         _card_heading("Test run")
-        st.info("Results appear here after execution (Milestone 6).")
+        if results is None:
+            st.info("Results appear here after execution.")
+        else:
+            tests = results["tests"]
+            passed = sum(1 for t in tests if t["status"] == "PASS")
+            duration_s = round(results["duration_ms"] / 1000, 1)
+            st.caption(f"{passed}/{len(tests)} completed · {duration_s}s")
+            st.table([{"ID": t["test_id"], "Scenario": t["scenario_id"], "Result": t["status"]} for t in tests])
+    with log_col, st.container(border=True):
+        _card_heading("Execution log")
+        log_path = controller.run_dir / "execution" / "pytest_output.log" if controller is not None else None
+        if log_path is not None and log_path.exists():
+            st.code(log_path.read_text(encoding="utf-8", errors="replace"), language="text")
+        else:
+            st.info("Real pytest output appears here after execution.")
 
 
 # ---------------------------------------------------------------------------
-# Page "results" (Results) -- whole page is a Milestone 6 placeholder.
+# Page "results" (Results)
 # ---------------------------------------------------------------------------
 
 
 def _render_page_results(state: UIState, data: dict) -> None:
     _render_page_header("Results")
     _render_action_banner(data, "results")
-    st.info("Results appear after the tests run (Milestone 6).")
+    controller: RunController | None = data["controller"]
+    results = data.get("results")
+    if controller is None or results is None:
+        st.info("Results appear after the tests run.")
+        return
+
+    tests = results["tests"]
+    metadata = data.get("report_metadata") or {}
+    workflow_status = metadata.get("agent_workflow_status") or controller.workflow_state
+    verification_status = metadata.get("payment_verification_status") or reporting.payment_verification_status(results)
+
+    banner_cols = st.columns(2)
+    with banner_cols[0]:
+        (st.success if workflow_status == "COMPLETED" else st.error)(f"Agent workflow: {workflow_status}")
+    with banner_cols[1]:
+        (st.success if verification_status == "PASSED" else st.error)(f"Payment verification: {verification_status}")
+
+    total = len(tests)
+    passed = sum(1 for t in tests if t["status"] == "PASS")
+    failed = total - passed
+    coverage = data.get("coverage_final") or {}
+    coverage_text = f"{coverage['covered']}/{coverage['required']}" if coverage else "—"
+    duration_s = round(results["duration_ms"] / 1000, 1)
+
+    tiles = st.columns(5)
+    tiles[0].metric("Total tests", total)
+    tiles[1].metric("Passed", passed)
+    tiles[2].metric("Failed", failed)
+    tiles[3].metric("Coverage", coverage_text)
+    tiles[4].metric("Duration", f"{duration_s}s")
+
+    with st.container(border=True):
+        _card_heading("Test results")
+        st.table(
+            [
+                {
+                    "ID": t["test_id"],
+                    "Scenario": t["scenario_id"],
+                    "Expected": t["expected"],
+                    "Actual": t["actual"],
+                    "Status": t["status"],
+                }
+                for t in tests
+            ]
+        )
+        st.caption("Actual values are recorded by each test, never copied from Expected.")
+
+    analysis = data.get("analysis")
+    has_failure = bool(analysis and analysis.get("has_failure"))
+    failure_col, decider_col = st.columns(2)
+    with failure_col, st.container(border=True):
+        _card_heading(f"Failure — {analysis['test_id']}" if has_failure else "Failure")
+        if has_failure:
+            st.markdown(f"**What happened:** {analysis['actual_behavior']}")
+            st.markdown(f"**Rule violated:** {analysis['expected_behavior']}")
+            st.markdown("**Impact:**")
+            for item in analysis.get("impact", []):
+                st.markdown(f"- {item}")
+            st.markdown("**Next step:** Developer fix. The agent reports defects; it does not change code.")
+        else:
+            st.success("No failure observed.")
+
+    with decider_col, st.container(border=True):
+        _card_heading("Decider decision trace")
+        choice_threshold = round4(_choice_threshold())
+        decision_records = data.get("decisions") or []
+        if not decision_records:
+            st.caption("No decisions recorded.")
+        for record in decision_records:
+            st.markdown(f"{decision_icon(record)} **{record.get('checkpoint')}**: {decider_decision_value(record)}")
+            if record.get("decision_source") != "HUMAN_ESCALATION":
+                confidence = round4(primary_choice_confidence(record))
+                st.caption(
+                    f"Confidence {confidence if confidence is not None else '—'} vs "
+                    f"τ {choice_threshold if choice_threshold is not None else '—'} · "
+                    f"Route {record.get('route')} · {record.get('decision_source')}"
+                )
+            else:
+                st.caption(f"Route {record.get('route')} · {record.get('decision_source')}")
+
+    if has_failure:
+        with st.container(border=True):
+            _card_heading(f"Evidence — {analysis['test_id']}")
+            evidence_path = controller.run_dir / (analysis.get("evidence_reference") or "")
+            evidence = _load_json(evidence_path) or {}
+            tabs = st.tabs(["Callbacks", "Ledger entries", "Test log"])
+            with tabs[0]:
+                callbacks = [e for e in evidence.get("events", []) if e.get("action") == "callback_delivered"]
+                st.code(json.dumps(callbacks, indent=2), language="json")
+            with tabs[1]:
+                st.code(json.dumps(evidence.get("ledger", []), indent=2), language="json")
+            with tabs[2]:
+                log_path = controller.run_dir / results.get("log_reference", "")
+                log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else "(no log captured)"
+                st.code(log_text, language="text")
+            st.caption("Real JSON is whatever the test wrote to the run's evidence folder.")
+
+    report_path = controller.run_dir / "report.md"
+    download_cols = st.columns(2)
+    with download_cols[0]:
+        if report_path.exists():
+            st.download_button(
+                "Download report (.md)",
+                data=report_path.read_bytes(),
+                file_name="report.md",
+                mime="text/markdown",
+            )
+        else:
+            st.button("Download report (.md)", key="download_report_btn", icon=":material/lock:", disabled=True)
+    with download_cols[1]:
+        zip_bytes = build_evidence_zip(controller.run_dir)
+        if zip_bytes is not None:
+            st.download_button(
+                "Download evidence (.zip)",
+                data=zip_bytes,
+                file_name=f"{controller.run_id}_evidence.zip",
+                mime="application/zip",
+            )
+        else:
+            st.button("Download evidence (.zip)", key="download_evidence_btn", icon=":material/lock:", disabled=True)
 
 
 _NAV_RENDERERS = {
