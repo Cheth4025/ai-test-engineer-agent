@@ -445,3 +445,228 @@ def test_available_versions_finds_present_version_files(tmp_path):
 
 def test_available_versions_empty_when_none_present(tmp_path):
     assert ui.available_versions(tmp_path, "scenarios") == []
+
+
+# ---------------------------------------------------------------------------
+# parse_business_rules -- real per-BR text from requirement.json, never
+# hardcoded; only the short label (BR_SHORT_LABELS) is a static lookup,
+# copied verbatim from docs/AI_Test_Engineer_Agent_Requirements.md.
+# ---------------------------------------------------------------------------
+
+_REAL_REQUIREMENT_TEXT = (
+    "As a customer, I want to retry a payment when the payment gateway times out, "
+    "without being charged twice.\n"
+    "BR01: Every payment request must include a unique idempotency key for its "
+    "logical payment; retries reuse that key.\n"
+    "BR02: Reusing the same key with the same payload resolves the original "
+    "payment and must not create another charge.\n"
+    "BR03: Reusing the same key with a different payment amount is rejected; the "
+    "original charge and ledger remain unchanged.\n"
+    "BR04: A timeout must not automatically mark the payment as failed. Retain "
+    "its unresolved outcome until status verification or a callback establishes "
+    "the result.\n"
+    "BR05: Verify the original payment status before initiating another charge. "
+    "If already successful, return the original result. If unresolved, do not "
+    "create a new charge; retain the unresolved outcome until the scripted "
+    "original success is available.\n"
+    "BR06: Re-delivery of the same successful callback, identified by callback "
+    "ID and payment ID, must not create another financial ledger posting."
+)
+
+
+def test_parse_business_rules_extracts_all_six_in_order():
+    rules = ui.parse_business_rules(_REAL_REQUIREMENT_TEXT)
+
+    assert [r["rule_id"] for r in rules] == ["BR01", "BR02", "BR03", "BR04", "BR05", "BR06"]
+    assert rules[0]["label"] == "Idempotency key"
+    assert rules[0]["description"].startswith("Every payment request must include")
+    assert rules[5]["label"] == "Callback idempotency"
+
+
+def test_parse_business_rules_skips_the_non_rule_opening_line():
+    rules = ui.parse_business_rules(_REAL_REQUIREMENT_TEXT)
+    assert not any("As a customer" in r["description"] for r in rules)
+
+
+def test_parse_business_rules_empty_or_none_text():
+    assert ui.parse_business_rules("") == []
+    assert ui.parse_business_rules(None) == []
+
+
+# ---------------------------------------------------------------------------
+# added_by_remediation -- pure scenario_id set diff, no new field needed.
+# ---------------------------------------------------------------------------
+
+
+def test_added_by_remediation_finds_the_new_scenario_id():
+    previous = [{"scenario_id": "S01"}, {"scenario_id": "S02"}, {"scenario_id": "S03"}, {"scenario_id": "S05"}]
+    current = [
+        {"scenario_id": "S01"},
+        {"scenario_id": "S02"},
+        {"scenario_id": "S03"},
+        {"scenario_id": "S04"},
+        {"scenario_id": "S05"},
+    ]
+    assert ui.added_by_remediation(previous, current) == {"S04"}
+
+
+def test_added_by_remediation_empty_when_no_previous_version():
+    current = [{"scenario_id": "S01"}, {"scenario_id": "S02"}]
+    assert ui.added_by_remediation(None, current) == set()
+
+
+def test_added_by_remediation_empty_when_sets_are_identical():
+    scenarios = [{"scenario_id": "S01"}, {"scenario_id": "S02"}]
+    assert ui.added_by_remediation(scenarios, scenarios) == set()
+
+
+# ---------------------------------------------------------------------------
+# split_shared_assertions -- real required_assertions tuples from
+# config/scenario_catalog.json (inlined here, not re-read from disk, same
+# style as this file's other fixtures), the literal tuple-exact intersection
+# across all five scenarios.
+# ---------------------------------------------------------------------------
+
+_SHARED_FIVE = [
+    {"observation": "gateway_charge_count", "operator": "EQ", "expected": 1},
+    {"observation": "ledger_success_count", "operator": "EQ", "expected": 1},
+    {"observation": "payment_state", "operator": "EQ", "expected": "SUCCESS"},
+    {"observation": "amount", "operator": "EQ", "expected": "100.00"},
+    {"observation": "currency", "operator": "EQ", "expected": "USD"},
+]
+
+_REAL_PER_SCENARIO_ASSERTIONS = {
+    "S01": list(_SHARED_FIVE),
+    "S02": [
+        {"observation": "timeout_not_failed", "operator": "EQ", "expected": True},
+        {"observation": "status_verification_before_retry_charge", "operator": "PRECEDES", "expected": True},
+        {"observation": "same_idempotency_key", "operator": "EQ", "expected": True},
+        {"observation": "same_payload", "operator": "EQ", "expected": True},
+        *_SHARED_FIVE,
+    ],
+    "S03": [
+        {"observation": "conflict_rejected", "operator": "EQ", "expected": True},
+        {"observation": "original_financial_records_unchanged", "operator": "EQ", "expected": True},
+        *_SHARED_FIVE,
+    ],
+    "S04": list(_SHARED_FIVE),
+    "S05": [
+        {"observation": "timeout_not_failed", "operator": "EQ", "expected": True},
+        {"observation": "delayed_success_resolves_original", "operator": "EQ", "expected": True},
+        {"observation": "same_idempotency_key", "operator": "EQ", "expected": True},
+        {"observation": "same_payload", "operator": "EQ", "expected": True},
+        *_SHARED_FIVE,
+    ],
+}
+
+
+def test_split_shared_assertions_finds_the_real_five_tuple_shared_by_all():
+    shared, _ = ui.split_shared_assertions(_REAL_PER_SCENARIO_ASSERTIONS)
+
+    assert {(a["observation"], a["operator"], a["expected"]) for a in shared} == {
+        (a["observation"], a["operator"], a["expected"]) for a in _SHARED_FIVE
+    }
+    # ledger_success_count first -- that's the assertion T04 is about.
+    assert shared[0]["observation"] == "ledger_success_count"
+
+
+def test_split_shared_assertions_remainder_is_scenario_specific():
+    _, remainder = ui.split_shared_assertions(_REAL_PER_SCENARIO_ASSERTIONS)
+
+    assert {a["observation"] for a in remainder["S03"]} == {
+        "conflict_rejected",
+        "original_financial_records_unchanged",
+    }
+    # T04/S04 has no scenario-specific assertions beyond the shared five --
+    # the UI renders "shared checks only" for this, not a blank cell.
+    assert remainder["S04"] == []
+
+
+def test_split_shared_assertions_empty_input():
+    shared, remainder = ui.split_shared_assertions({})
+    assert shared == []
+    assert remainder == {}
+
+
+# ---------------------------------------------------------------------------
+# can_approve / can_reject -- enforced for real in RunController.
+# record_approval; these mirror can_start_analysis/can_confirm_decision's
+# existing pattern so the UI can disable buttons before a doomed click.
+# ---------------------------------------------------------------------------
+
+
+def _awaiting_approval_controller(tmp_path) -> RunController:
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    rows = [
+        {"scenario_id": sid, "test_id": f"T{sid[1:]}", "rule_ids": ["BR01"], "status": "VALID", "findings": []}
+        for sid in ("S01", "S02", "S03", "S04", "S05")
+    ]
+    (tmp_path / "coverage_v1.json").write_text(
+        json.dumps({"covered": 5, "required": 5, "percentage": 100.0, "rows": rows, "rule_traceability": {}})
+    )
+    return controller
+
+
+def test_can_approve_true_when_ready(tmp_path):
+    controller = _awaiting_approval_controller(tmp_path)
+    assert ui.can_approve(ui.UIState(), controller, "Chethan", 1) is True
+
+
+def test_can_approve_false_when_reviewer_blank(tmp_path):
+    controller = _awaiting_approval_controller(tmp_path)
+    assert ui.can_approve(ui.UIState(), controller, "   ", 1) is False
+
+
+def test_can_approve_false_when_not_awaiting_approval(tmp_path):
+    controller = RunController("r1", tmp_path)  # PREPARING
+    assert ui.can_approve(ui.UIState(), controller, "Chethan", 1) is False
+
+
+def test_can_approve_false_when_blockers_open(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    rows = [{"scenario_id": "S01", "test_id": "T01", "rule_ids": ["BR01"], "status": "MISSING", "findings": []}]
+    (tmp_path / "coverage_v1.json").write_text(
+        json.dumps({"covered": 0, "required": 1, "percentage": 0.0, "rows": rows, "rule_traceability": {}})
+    )
+    assert ui.can_approve(ui.UIState(), controller, "Chethan", 1) is False
+
+
+def test_can_approve_false_when_already_recorded(tmp_path):
+    controller = _awaiting_approval_controller(tmp_path)
+    controller.record_approval("APPROVE", "Chethan", 1)
+    assert ui.can_approve(ui.UIState(), controller, "Someone Else", 1) is False
+
+
+def test_can_reject_true_despite_open_blockers(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    rows = [{"scenario_id": "S01", "test_id": "T01", "rule_ids": ["BR01"], "status": "MISSING", "findings": []}]
+    (tmp_path / "coverage_v1.json").write_text(
+        json.dumps({"covered": 0, "required": 1, "percentage": 0.0, "rows": rows, "rule_traceability": {}})
+    )
+    assert ui.can_reject(ui.UIState(), controller, "Chethan") is True
+
+
+def test_can_reject_false_when_reviewer_blank(tmp_path):
+    controller = _awaiting_approval_controller(tmp_path)
+    assert ui.can_reject(ui.UIState(), controller, "") is False
+
+
+def test_can_reject_false_when_not_awaiting_approval(tmp_path):
+    controller = RunController("r1", tmp_path)  # PREPARING
+    assert ui.can_reject(ui.UIState(), controller, "Chethan") is False
+
+
+def test_can_approve_and_can_reject_false_when_controller_none():
+    assert ui.can_approve(ui.UIState(), None, "Chethan", 1) is False
+    assert ui.can_reject(ui.UIState(), None, "Chethan") is False
+
+
+def test_can_approve_and_can_reject_false_when_worker_busy(tmp_path):
+    controller = _awaiting_approval_controller(tmp_path)
+    state = ui.UIState()
+    state.worker_busy = True
+    assert ui.can_approve(state, controller, "Chethan", 1) is False
+    assert ui.can_reject(state, controller, "Chethan") is False

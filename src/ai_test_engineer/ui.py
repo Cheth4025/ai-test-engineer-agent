@@ -145,6 +145,38 @@ def can_confirm_decision(state: UIState, controller: RunController | None) -> bo
     )
 
 
+def can_approve(
+    state: UIState, controller: RunController | None, reviewer: str, scenario_set_version: int | None
+) -> bool:
+    """Mirrors RunController.record_approval's own guards (the real
+    enforcement) so the UI can disable a doomed click -- never the only
+    guard."""
+    if controller is None or state.worker_busy:
+        return False
+    if controller.workflow_state != "AWAITING_APPROVAL":
+        return False
+    if (controller.run_dir / "approval.json").exists():
+        return False
+    if not reviewer or not reviewer.strip():
+        return False
+    if scenario_set_version is None:
+        return False
+    return controller.approval_blockers(scenario_set_version) == []
+
+
+def can_reject(state: UIState, controller: RunController | None, reviewer: str) -> bool:
+    """Unlike can_approve, never gated on approval_blockers() -- Reject is
+    allowed at AWAITING_APPROVAL even with open blockers (RunController.
+    record_approval enforces the same)."""
+    if controller is None or state.worker_busy:
+        return False
+    if controller.workflow_state != "AWAITING_APPROVAL":
+        return False
+    if (controller.run_dir / "approval.json").exists():
+        return False
+    return bool(reviewer and reviewer.strip())
+
+
 # ---------------------------------------------------------------------------
 # Worker thread plumbing. _run_worker and everything it calls must never
 # import or call any st.* API.
@@ -319,6 +351,89 @@ def available_versions(run_dir: Path, stem: str) -> list[int]:
         if suffix.isdigit():
             versions.append(int(suffix))
     return sorted(versions)
+
+
+# Short BR labels: no field for these exists in any runtime-loaded file
+# (requirement.json has only one long text blob; interpretation.json's
+# "meaning" is a run-specific paraphrase, not a stable short label) --
+# resolved with the user: a static lookup copied verbatim from
+# docs/AI_Test_Engineer_Agent_Requirements.md's own "BR0N -- Label"
+# headings, never invented wording. The Description column below still
+# comes from the real per-BR sentence in requirement.json's text.
+BR_SHORT_LABELS = {
+    "BR01": "Idempotency key",
+    "BR02": "Identical retry",
+    "BR03": "Conflicting amount",
+    "BR04": "Uncertain timeout",
+    "BR05": "Verify before retry",
+    "BR06": "Callback idempotency",
+}
+
+
+def parse_business_rules(text: str | None) -> list[dict]:
+    """Real per-BR sentences parsed from requirement.json's text, one
+    "BR0N: ..." line each -- never hardcoded. Only BR01-BR06 lines are
+    recognized (BR_SHORT_LABELS is the membership check), so the opening
+    user-story line and anything else is skipped."""
+    rules = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        rule_id, sep, description = line.partition(":")
+        rule_id = rule_id.strip()
+        if not sep or rule_id not in BR_SHORT_LABELS:
+            continue
+        rules.append({"rule_id": rule_id, "label": BR_SHORT_LABELS[rule_id], "description": description.strip()})
+    return rules
+
+
+def added_by_remediation(previous_scenarios: list[dict] | None, current_scenarios: list[dict]) -> set[str]:
+    """scenario_ids present in this version but absent from the previous
+    one -- the "Added by remediation" badge, derived purely by diffing real
+    scenario_id sets between consecutive scenarios_vN.json files. No new
+    field needed. Empty (not an error) when there is no previous version."""
+    if previous_scenarios is None:
+        return set()
+    previous_ids = {s["scenario_id"] for s in previous_scenarios}
+    current_ids = {s["scenario_id"] for s in current_scenarios}
+    return current_ids - previous_ids
+
+
+def _assertion_key(assertion: dict) -> tuple:
+    return (assertion["observation"], assertion["operator"], assertion["expected"])
+
+
+def split_shared_assertions(
+    per_scenario_assertions: dict[str, list[dict]],
+) -> tuple[list[dict], dict[str, list[dict]]]:
+    """Splits each scenario's real required_assertions (from
+    config/scenario_catalog.json) into the tuple-exact subset shared by
+    every scenario and each scenario's own remainder -- no short-phrase
+    field exists anywhere for this, so the UI shows the real tuples
+    (resolved with the user) rather than inventing prose. The shared list
+    puts ledger_success_count first: that's the assertion T04 is about."""
+    if not per_scenario_assertions:
+        return [], {}
+
+    key_sets = [{_assertion_key(a) for a in assertions} for assertions in per_scenario_assertions.values()]
+    shared_keys = set.intersection(*key_sets)
+
+    shared_by_key: dict[tuple, dict] = {}
+    for assertions in per_scenario_assertions.values():
+        for assertion in assertions:
+            key = _assertion_key(assertion)
+            if key in shared_keys and key not in shared_by_key:
+                shared_by_key[key] = assertion
+    shared = list(shared_by_key.values())
+    for index, assertion in enumerate(shared):
+        if assertion["observation"] == "ledger_success_count":
+            shared.insert(0, shared.pop(index))
+            break
+
+    remainder = {
+        scenario_id: [a for a in assertions if _assertion_key(a) not in shared_keys]
+        for scenario_id, assertions in per_scenario_assertions.items()
+    }
+    return shared, remainder
 
 
 def _host_label() -> str:
