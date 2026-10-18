@@ -15,7 +15,7 @@ If a mockup disagrees with `AI_Test_Engineer_Agent_Requirements.md` or `06_Strea
 
 | # | What the mockup shows | What to build instead |
 |---|---|---|
-| 1 | Sidebar with 5–6 pages and a 7-step stepper; the navigation differs between images | One Streamlit page with **four native tabs** (06 §1). A simple stage indicator is fine. |
+| 1 | Sidebar with 5–6 pages and a 7-step stepper; the navigation differs between images | **Owner-approved deviation from 06 §1's "four native tabs":** one Streamlit page with a fixed dark top bar and a dark left sidebar holding run status and a navigation control for the same **four sections** (Overview & Requirements, Scenarios & Coverage, Approval & Execution, Results & Report) -- navigation only, never a multi-page app and never a stepper. Still not the mockup's 5–6 pages / 7-step stepper; still never starts work. |
 | 2 | A single **"Approve & Execute"** button | **Separate** Approve, Reject and Execute buttons. Approve launches nothing (F06/F07, 06 §3). |
 | 3 | BR wording on the Overview, e.g. BR04 = "check status before retrying" | Show the **exact** BR01–BR06 text from the requirements file (BR04 = a timeout is not marked failed; it stays unresolved until verified). |
 | 4 | Scenario→rule mappings: S01/T01 = BR01, BR05; S02/T02 = BR01, BR02, BR05; S05/T05 = BR01, BR04, BR05 | Authority mappings: S01/T01 = BR01; S02/T02 and S05/T05 = BR01, BR02, BR04, BR05; S03/T03 = BR01, BR03; S04/T04 = BR06. |

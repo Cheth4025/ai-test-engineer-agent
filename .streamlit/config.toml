@@ -1,0 +1,28 @@
+# Loopback only (docs/06_Streamlit_UI_Specification.md Section 1): this app
+# is a single-process, single-run local tool, never intended to be exposed
+# on the network.
+[server]
+address = "127.0.0.1"
+
+[client]
+# Hides the Deploy button -- this is a local tool, not something to deploy.
+toolbarMode = "viewer"
+
+[theme]
+# Main accent color for primary-type buttons (Start Analysis, Confirm
+# decision, Execute). Main content area keeps the default light background
+# -- only the top bar (via scoped CSS in ui.py) and the sidebar (below) are
+# dark navy, per the owner-approved layout change.
+primaryColor = "#0D9488"
+# Native gap under the header (Streamlit reserves the header's own height
+# automatically on top of this) -- the officially recommended way to add
+# top/bottom clearance, instead of CSS .block-container padding. Tightened
+# from 2rem/none to 1rem per the layout-tightening pass.
+paddingTop = "1rem"
+paddingBottom = "1rem"
+
+[theme.sidebar]
+backgroundColor = "#0F1B2D"
+secondaryBackgroundColor = "#1B2A42"
+textColor = "#F5F5F5"
+paddingTop = "1rem"

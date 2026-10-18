@@ -382,6 +382,87 @@ def test_generate_scenarios_resolve_proceeds_when_clear(tmp_path):
 # -- escalation / on_decision / on_error, via the real DeciderGuardrail ------
 
 
+def test_coverage_escalation_persists_grounding_with_needs_review(tmp_path):
+    """decider_gate's resolve() (where build_coverage_checkpoint's own
+    record_grounding call lives) is never invoked once ANY verdict in a
+    checkpoint escalates -- confirmed in decider_gate/intervention.py.
+    Without on_decision also recording grounding on the Confirm path,
+    grounding_vN.json would never be written for an escalated COVERAGE
+    checkpoint, so unresolved_grounding_flags()/approval_blockers() would
+    stay silently empty and the next milestone's Approve guard would let
+    the run through with zero human grounding review."""
+    attempt_log = AttemptLog()
+    attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
+    scenario_set = {
+        "version": 1,
+        "scenarios": [_valid_scenario(sid) for sid in CATALOG["required_scenarios"]],
+        "omission_event": None,
+    }
+    attempt_log.record_success("generate_scenarios", 1, scenario_set)
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {}
+    _, gate, checkpoints, on_decision, on_error, _host_label = build_all(
+        attempt_log, CATALOG, controller, DECIDER_CFG, holder
+    )
+
+    from decider_gate.intervention import DeciderGuardrail
+
+    guardrail = DeciderGuardrail(
+        client=make_client(_escalate_handler), gate=gate, checkpoints=checkpoints, host_label="local-cpu",
+        on_decision=on_decision, on_error=on_error,
+    )
+    action = guardrail.before_tool_call(_make_event("save_scenario_set", {}))
+
+    assert isinstance(action, Confirm)
+    grounding = json.loads((controller.run_dir / "grounding_v1.json").read_text())
+    assert grounding["items"]
+    assert all(item["verdict"] == "NEEDS_REVIEW" for item in grounding["items"])
+
+    unresolved = controller.unresolved_grounding_flags(1)
+    assert unresolved and set(unresolved) == {item["scenario_id"] for item in grounding["items"]}
+
+    blockers = controller.approval_blockers(1)
+    for scenario_id in unresolved:
+        assert any(scenario_id in b for b in blockers)
+
+    for scenario_id in unresolved:
+        controller.resolve_grounding(1, scenario_id, "CONFIRMED_GROUNDED")
+    assert controller.unresolved_grounding_flags(1) == []
+
+
+def test_coverage_auto_resolution_still_records_grounding_exactly_once(tmp_path):
+    """on_decision's new escalation-path record_grounding call must not
+    double-write (or conflict with) resolve()'s existing AUTO-path call."""
+    attempt_log = AttemptLog()
+    attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
+    scenario_set = {
+        "version": 1,
+        "scenarios": [_valid_scenario(sid) for sid in CATALOG["required_scenarios"]],
+        "omission_event": None,
+    }
+    attempt_log.record_success("generate_scenarios", 1, scenario_set)
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {}
+    _, gate, checkpoints, on_decision, on_error, _host_label = build_all(
+        attempt_log, CATALOG, controller, DECIDER_CFG, holder
+    )
+
+    from decider_gate.intervention import DeciderGuardrail
+
+    guardrail = DeciderGuardrail(
+        client=make_client(_auto_handler), gate=gate, checkpoints=checkpoints, host_label="local-cpu",
+        on_decision=on_decision, on_error=on_error,
+    )
+    action = guardrail.before_tool_call(_make_event("save_scenario_set", {}))
+
+    assert isinstance(action, Proceed)
+    grounding = json.loads((controller.run_dir / "grounding_v1.json").read_text())
+    assert len(grounding["items"]) == len(CATALOG["required_scenarios"])  # written exactly once, no duplicates
+    # _auto_handler answers every noul confidently (route AUTO either way) --
+    # never NEEDS_REVIEW, which only comes from an ESCALATE route.
+    assert all(item["verdict"] in {"GROUNDED", "NOT_GROUNDED"} for item in grounding["items"])
+
+
 def test_escalate_sets_pending_decision_and_awaiting_stage(tmp_path):
     attempt_log = AttemptLog()
     attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)

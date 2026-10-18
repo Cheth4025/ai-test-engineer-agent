@@ -17,7 +17,9 @@ milestone does not solve that (no SessionManager wiring), only documents it.
 
 from __future__ import annotations
 
+import copy
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 WORKFLOW_STATES = {
@@ -37,6 +39,9 @@ WORKFLOW_STATES = {
 # This milestone only ever drives PREPARING / AWAITING_CLARIFICATION / BLOCKED
 # / STOPPED. The rest are later milestones' stages -- listed here so the
 # assertion in set_workflow_state has the full, correct vocabulary from docs/05.
+
+GROUNDING_RESOLUTIONS = {"CONFIRMED_GROUNDED", "CONFIRMED_NOT_GROUNDED"}
+APPROVAL_DECISIONS = {"APPROVE", "REJECT"}
 
 
 class RunController:
@@ -188,6 +193,149 @@ class RunController:
     def set_pending_decision(self, pending: dict | None) -> None:
         self.pending_decision = pending
         self._save_state()
+
+    # -- human grounding resolution -------------------------------------------
+    #
+    # Evidence immutability: a human resolution is recorded only in
+    # grounding_v{version}.json. coverage_v{version}.json is the validator's
+    # recorded output and is never rewritten here -- effective_coverage()
+    # derives the human-adjusted view at read time instead.
+
+    def resolve_grounding(
+        self, scenario_set_version: int, scenario_id: str, resolution: str, note: str | None = None
+    ) -> None:
+        assert resolution in GROUNDING_RESOLUTIONS, f"unknown resolution {resolution!r}"
+        path = self.run_dir / f"grounding_v{scenario_set_version}.json"
+        grounding = json.loads(path.read_text())
+        item = next((i for i in grounding["items"] if i["scenario_id"] == scenario_id), None)
+        if item is None:
+            raise ValueError(f"no grounding item for {scenario_id!r} in grounding_v{scenario_set_version}.json")
+        item["human_resolution"] = resolution
+        item["human_resolution_source"] = "HUMAN"
+        item["human_resolved_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if note is not None:
+            item["human_note"] = note
+        path.write_text(json.dumps(grounding, indent=2))
+
+    def effective_coverage(self, scenario_set_version: int) -> dict:
+        """Human-adjusted coverage view, derived from coverage_v{version}.json
+        + grounding_v{version}.json at read time. Never written to disk --
+        the recorded coverage file is never modified. A row whose scenario
+        has human_resolution == CONFIRMED_NOT_GROUNDED is shown INVALID here
+        regardless of the validator's recorded status; covered/percentage/
+        rule_traceability are recomputed from the adjusted rows. Returns the
+        recorded dict unchanged when no human resolution applies."""
+        coverage_path = self.run_dir / f"coverage_v{scenario_set_version}.json"
+        recorded = json.loads(coverage_path.read_text())
+
+        grounding_path = self.run_dir / f"grounding_v{scenario_set_version}.json"
+        grounding_items = []
+        if grounding_path.exists():
+            grounding_items = json.loads(grounding_path.read_text()).get("items", [])
+        not_grounded = {
+            item["scenario_id"] for item in grounding_items if item.get("human_resolution") == "CONFIRMED_NOT_GROUNDED"
+        }
+        if not not_grounded:
+            return recorded
+
+        effective = copy.deepcopy(recorded)
+        for row in effective["rows"]:
+            if row["scenario_id"] in not_grounded and row["status"] != "INVALID":
+                row["status"] = "INVALID"
+                row["findings"].append(f"human-confirmed NOT_GROUNDED: {row['scenario_id']}")
+        effective["covered"] = sum(1 for row in effective["rows"] if row["status"] == "VALID")
+        required = effective["required"]
+        effective["percentage"] = round(effective["covered"] / required * 100, 2) if required else 0.0
+        for scenario_id in not_grounded:
+            for scenario_ids in effective["rule_traceability"].values():
+                if scenario_id in scenario_ids:
+                    scenario_ids.remove(scenario_id)
+        return effective
+
+    def unresolved_grounding_flags(self, scenario_set_version: int) -> list[str]:
+        """scenario_ids whose verdict is NOT_GROUNDED or NEEDS_REVIEW and whose
+        human_resolution is still null, for grounding_v{version}.json. Read-only
+        helper the UI's Tab 2 uses to decide which rows need the Resolve
+        control, and the Approve guard in a later milestone will reuse as-is."""
+        path = self.run_dir / f"grounding_v{scenario_set_version}.json"
+        if not path.exists():
+            return []
+        items = json.loads(path.read_text()).get("items", [])
+        return [
+            item["scenario_id"]
+            for item in items
+            if item.get("verdict") in {"NOT_GROUNDED", "NEEDS_REVIEW"} and item.get("human_resolution") is None
+        ]
+
+    def approval_blockers(self, scenario_set_version: int) -> list[str]:
+        """Human-readable reasons Approve must stay blocked for this scenario
+        set version -- for the next milestone's Approve guard to consume
+        as-is. Read-only; combines three independent checks without
+        short-circuiting: unresolved grounding flags, an effective coverage
+        shortfall, and any critical open/conflicting ambiguity."""
+        blockers: list[str] = []
+
+        for scenario_id in self.unresolved_grounding_flags(scenario_set_version):
+            blockers.append(f"{scenario_id} grounding flag not resolved")
+
+        coverage = self.effective_coverage(scenario_set_version)
+        if coverage["covered"] < coverage["required"]:
+            blockers.append(
+                f"effective coverage {coverage['covered']}/{coverage['required']} is below required 5/5"
+            )
+
+        interpretation_path = self.run_dir / "interpretation.json"
+        if interpretation_path.exists():
+            interpretation = json.loads(interpretation_path.read_text())
+            for ambiguity in interpretation.get("ambiguities", []):
+                if ambiguity.get("critical") and ambiguity.get("status") in {"OPEN", "CONFLICT"}:
+                    blockers.append(
+                        f"critical ambiguity {ambiguity.get('id')} unresolved: {ambiguity.get('question')}"
+                    )
+
+        return blockers
+
+    # -- human approval ---------------------------------------------------
+    #
+    # No prior approve/reject/approval.json code exists anywhere in this
+    # codebase (checked) -- this is the first write path for it. Guards are
+    # enforced here, not only in the UI, matching every other single-write/
+    # state-gated RunController method (resolve_grounding, use_remediation,
+    # etc.): the UI's disabled buttons are a convenience, this is the
+    # backstop.
+
+    def record_approval(
+        self, decision: str, reviewer: str, scenario_set_version: int, comment: str | None = None
+    ) -> dict:
+        if decision not in APPROVAL_DECISIONS:
+            raise ValueError(f"unknown decision {decision!r}")
+        if not reviewer or not reviewer.strip():
+            raise ValueError("reviewer name is required")
+        if self.workflow_state != "AWAITING_APPROVAL":
+            raise ValueError(
+                f"record_approval requires workflow_state AWAITING_APPROVAL, got {self.workflow_state!r}"
+            )
+        if decision == "APPROVE":
+            blockers = self.approval_blockers(scenario_set_version)
+            if blockers:
+                raise ValueError(f"cannot APPROVE with open blockers: {blockers}")
+        if (self.run_dir / "approval.json").exists():
+            raise ValueError("approval already recorded for this run")
+
+        record = {
+            "run_id": self.run_id,
+            "decision": decision,
+            "reviewer": reviewer.strip(),
+            "comment": comment,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        self.save_evidence("approval.json", record)
+        self.set_workflow_state(
+            "APPROVED" if decision == "APPROVE" else "REJECTED",
+            stage="APPROVED" if decision == "APPROVE" else "REJECTED",
+            busy=False,
+        )
+        return record
 
     def save_evidence(self, name: str, data: dict) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
