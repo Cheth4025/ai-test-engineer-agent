@@ -21,9 +21,12 @@ from ai_test_engineer.checkpoints import (
     StageGuard,
     apply_human_decision,
     build_all,
+    build_completion_checkpoint,
     build_coverage_checkpoint,
+    build_failure_checkpoint,
     build_generate_scenarios_checkpoint,
     decision_record_reused,
+    failure_facts,
     full_coverage,
     grounding_items,
     remediation_feedback,
@@ -795,3 +798,301 @@ def test_build_all_uses_resolved_host_label_in_decisions(tmp_path, monkeypatch):
     guardrail.before_tool_call(_make_event("generate_scenarios", {}))
 
     assert controller.decisions[-1]["host_label"] == "ec2-g4dn-t4"
+
+
+# ---------------------------------------------------------------------------
+# FAILURE checkpoint (finalize_analysis) -- AUTO, ESCALATE+human, and the
+# deterministic BUSINESS_RULE_VIOLATION-without-a-real-failure guard.
+# ---------------------------------------------------------------------------
+
+REQUIREMENT_TEXT_WITH_BR06 = (
+    "As a customer...\n"
+    "BR06: Re-delivery of the same successful callback, identified by callback "
+    "ID and payment ID, must not create another financial ledger posting."
+)
+
+
+def _results(*, failed: bool) -> dict:
+    t04_status = "FAIL" if failed else "PASS"
+    t04_actual = "2 ledger entries" if failed else "1 ledger entry"
+    return {
+        "execution_id": "test-run",
+        "return_code": 1 if failed else 0,
+        "duration_ms": 100,
+        "tests": [
+            {
+                "test_id": "T01",
+                "scenario_id": "S01",
+                "rule_ids": ["BR01"],
+                "status": "PASS",
+                "duration_ms": 3,
+                "expected": "1 charge",
+                "actual": "1 charge",
+                "failure_message": None,
+                "evidence_reference": "execution/T01_evidence.json",
+            },
+            {
+                "test_id": "T04",
+                "scenario_id": "S04",
+                "rule_ids": ["BR06"],
+                "status": t04_status,
+                "duration_ms": 5,
+                "expected": "1 ledger entry",
+                "actual": t04_actual,
+                "failure_message": "assert 2 == 1" if failed else None,
+                "evidence_reference": "execution/T04_evidence.json",
+            },
+        ],
+    }
+
+
+def _setup_failure_checkpoint(tmp_path, results: dict):
+    attempt_log = AttemptLog()
+    attempt_log.record_success("execute_tests", 1, results)
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {}
+    checkpoint = build_failure_checkpoint(attempt_log, controller, REQUIREMENT_TEXT_WITH_BR06, holder)
+    checkpoint.build_questions(None)
+    return checkpoint, controller, holder
+
+
+def test_failure_facts_extracts_rule_text_and_real_counts():
+    facts = failure_facts(_results(failed=True), REQUIREMENT_TEXT_WITH_BR06)
+
+    assert facts["has_failure"] is True
+    assert facts["test_id"] == "T04"
+    assert facts["expected"] == "1 ledger entry"
+    assert facts["actual"] == "2 ledger entries"
+    assert facts["rule_text"].startswith("BR06: Re-delivery")
+
+
+def test_failure_facts_no_failure_when_all_pass():
+    facts = failure_facts(_results(failed=False), REQUIREMENT_TEXT_WITH_BR06)
+    assert facts == {"has_failure": False}
+
+
+def test_failure_resolve_auto_report_failure_writes_analysis(tmp_path):
+    checkpoint, controller, holder = _setup_failure_checkpoint(tmp_path, _results(failed=True))
+    verdicts = {
+        "failure_class": _choice_verdict("failure_class", "BUSINESS_RULE_VIOLATION"),
+        "failure_action": _choice_verdict("failure_action", "REPORT_FAILURE"),
+    }
+
+    action = checkpoint.resolve(verdicts)
+
+    assert isinstance(action, Proceed)
+    analysis = json.loads((controller.run_dir / "analysis.json").read_text())
+    assert analysis["classification"] == "BUSINESS_RULE_VIOLATION"
+    assert analysis["handling_action"] == "REPORT_FAILURE"
+    assert analysis["investigated"] is False
+    assert controller.investigation_used is False
+
+
+def test_failure_resolve_investigate_consumes_investigation_budget(tmp_path):
+    checkpoint, controller, holder = _setup_failure_checkpoint(tmp_path, _results(failed=True))
+    verdicts = {
+        "failure_class": _choice_verdict("failure_class", "BUSINESS_RULE_VIOLATION"),
+        "failure_action": _choice_verdict("failure_action", "INVESTIGATE_FAILURE"),
+    }
+
+    action = checkpoint.resolve(verdicts)
+
+    assert isinstance(action, Proceed)
+    assert controller.investigation_used is True
+    analysis = json.loads((controller.run_dir / "analysis.json").read_text())
+    assert analysis["investigated"] is True
+
+
+def test_failure_resolve_denies_business_rule_violation_without_real_failure(tmp_path):
+    """Deterministic guard, never overridable -- docs/05 Section 11:
+    "controller rejects BUSINESS_RULE_VIOLATION when no failed assertion
+    exists". orchestration.py never calls this checkpoint's build_questions
+    when nothing failed (it skips FAILURE entirely) -- resolve()'s guard is
+    pure defense-in-depth, exercised directly here by setting holder the
+    way _compute() would have, without going through build_questions (which
+    assumes a real failure exists, same as build_coverage_checkpoint's
+    build_questions assumes a scored scenario set)."""
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {"failure_facts": failure_facts(_results(failed=False), REQUIREMENT_TEXT_WITH_BR06)}
+    checkpoint = build_failure_checkpoint(attempt_log, controller, REQUIREMENT_TEXT_WITH_BR06, holder)
+    verdicts = {
+        "failure_class": _choice_verdict("failure_class", "BUSINESS_RULE_VIOLATION"),
+        "failure_action": _choice_verdict("failure_action", "REPORT_FAILURE"),
+    }
+
+    action = checkpoint.resolve(verdicts)
+
+    assert isinstance(action, Deny)
+    assert not (controller.run_dir / "analysis.json").exists()
+
+
+def test_failure_escalate_sets_pending_decision_with_both_questions(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success("interpret_requirement", 1, ONE_RULE_INTERPRETATION)
+    attempt_log.record_success("execute_tests", 1, _results(failed=True))
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {}
+    _, gate, checkpoints, on_decision, on_error, _host_label = build_all(
+        attempt_log, CATALOG, controller, DECIDER_CFG, holder, REQUIREMENT_TEXT_WITH_BR06
+    )
+
+    from decider_gate.intervention import DeciderGuardrail
+
+    guardrail = DeciderGuardrail(
+        client=make_client(_escalate_handler),
+        gate=gate,
+        checkpoints=checkpoints,
+        host_label="local-cpu",
+        on_decision=on_decision,
+        on_error=on_error,
+    )
+    action = guardrail.before_tool_call(_make_event("finalize_analysis", {}))
+
+    assert isinstance(action, Confirm)
+    assert controller.pending_decision is not None
+    assert controller.pending_decision["tool_name"] == "finalize_analysis"
+    assert set(controller.pending_decision["verdicts"]) == {"failure_class", "failure_action"}
+    assert controller.pending_decision["context"]["failure_facts"]["test_id"] == "T04"
+
+
+def test_human_report_failure_pick_proceeds(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success("execute_tests", 1, _results(failed=True))
+    controller = RunController("test-run", tmp_path)
+    facts = failure_facts(_results(failed=True), REQUIREMENT_TEXT_WITH_BR06)
+    pending = {
+        "tool_name": "finalize_analysis",
+        "context": {"failure_facts": facts},
+        "verdicts": {
+            "failure_class": _pending_verdict_fields("BUSINESS_RULE_VIOLATION"),
+            "failure_action": _pending_verdict_fields("REPORT_FAILURE"),
+        },
+    }
+    controller.set_pending_decision(pending)
+
+    outcome, feedback = apply_human_decision(pending, "REPORT_FAILURE", controller)
+
+    assert outcome == "PROCEED"
+    analysis = json.loads((controller.run_dir / "analysis.json").read_text())
+    assert analysis["classification"] == "BUSINESS_RULE_VIOLATION"
+    assert analysis["handling_action"] == "REPORT_FAILURE"
+
+
+def test_human_business_rule_violation_pick_rejected_without_real_failure(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    facts = failure_facts(_results(failed=False), REQUIREMENT_TEXT_WITH_BR06)
+    pending = {
+        "tool_name": "finalize_analysis",
+        "context": {"failure_facts": facts},
+        "verdicts": {
+            "failure_class": _pending_verdict_fields("BUSINESS_RULE_VIOLATION"),
+            "failure_action": _pending_verdict_fields("REPORT_FAILURE"),
+        },
+    }
+    controller.set_pending_decision(pending)
+
+    outcome, feedback = apply_human_decision(pending, "REPORT_FAILURE", controller)
+
+    assert outcome == "REJECTED_RETRY"
+    assert controller.decisions[-1]["decision_status"] == "REJECTED"
+    assert controller.pending_decision is pending
+
+
+# ---------------------------------------------------------------------------
+# COMPLETION checkpoint (render_report) -- AUTO, ESCALATE+human, and the
+# deterministic missing-artifact readiness guard.
+# ---------------------------------------------------------------------------
+
+
+def _setup_completion_checkpoint(tmp_path, *, results: bool, analysis: bool):
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    if results:
+        controller.save_evidence("results.json", _results(failed=False))
+    if analysis:
+        controller.save_evidence("analysis.json", {"has_failure": False})
+    holder: dict = {}
+    checkpoint = build_completion_checkpoint(attempt_log, controller, holder)
+    checkpoint.build_questions(None)
+    return checkpoint, controller, holder
+
+
+def test_completion_resolve_finalizes_and_writes_report(tmp_path):
+    checkpoint, controller, holder = _setup_completion_checkpoint(tmp_path, results=True, analysis=True)
+    verdicts = {"completion_action": _choice_verdict("completion_action", "FINALIZE_RESULTS")}
+
+    action = checkpoint.resolve(verdicts)
+
+    assert isinstance(action, Proceed)
+    assert controller.workflow_state == "COMPLETED"
+    assert (controller.run_dir / "report.md").exists()
+    assert (controller.run_dir / "report_metadata.json").exists()
+
+
+def test_completion_resolve_denies_when_results_missing(tmp_path):
+    checkpoint, controller, holder = _setup_completion_checkpoint(tmp_path, results=False, analysis=False)
+    verdicts = {"completion_action": _choice_verdict("completion_action", "FINALIZE_RESULTS")}
+
+    action = checkpoint.resolve(verdicts)
+
+    assert isinstance(action, Deny)
+    assert not (controller.run_dir / "report.md").exists()
+
+
+def test_completion_resolve_not_ready_blocks(tmp_path):
+    checkpoint, controller, holder = _setup_completion_checkpoint(tmp_path, results=True, analysis=True)
+    verdicts = {"completion_action": _choice_verdict("completion_action", "NOT_READY")}
+
+    action = checkpoint.resolve(verdicts)
+
+    assert isinstance(action, Deny)
+    assert controller.workflow_state == "BLOCKED"
+
+
+def test_human_finalize_results_pick_proceeds_and_writes_report(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    controller.save_evidence("results.json", _results(failed=False))
+    controller.save_evidence("analysis.json", {"has_failure": False})
+    pending = {
+        "tool_name": "render_report",
+        "context": {"completion_ready": {"results_exists": True, "analysis_exists": True}},
+        "verdicts": {"completion_action": _pending_verdict_fields("FINALIZE_RESULTS")},
+    }
+    controller.set_pending_decision(pending)
+
+    outcome, feedback = apply_human_decision(pending, "FINALIZE_RESULTS", controller)
+
+    assert outcome == "PROCEED"
+    assert controller.workflow_state == "COMPLETED"
+    assert (controller.run_dir / "report.md").exists()
+
+
+def test_human_not_ready_pick_blocks(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    pending = {
+        "tool_name": "render_report",
+        "context": {"completion_ready": {"results_exists": True, "analysis_exists": True}},
+        "verdicts": {"completion_action": _pending_verdict_fields("NOT_READY")},
+    }
+    controller.set_pending_decision(pending)
+
+    outcome, feedback = apply_human_decision(pending, "NOT_READY", controller)
+
+    assert outcome == "BLOCKED"
+    assert controller.workflow_state == "BLOCKED"
+
+
+def test_human_finalize_results_pick_rejected_when_evidence_missing(tmp_path):
+    controller = RunController("test-run", tmp_path)
+    pending = {
+        "tool_name": "render_report",
+        "context": {"completion_ready": {"results_exists": False, "analysis_exists": False}},
+        "verdicts": {"completion_action": _pending_verdict_fields("FINALIZE_RESULTS")},
+    }
+    controller.set_pending_decision(pending)
+
+    outcome, feedback = apply_human_decision(pending, "FINALIZE_RESULTS", controller)
+
+    assert outcome == "REJECTED_RETRY"
+    assert controller.pending_decision is pending
