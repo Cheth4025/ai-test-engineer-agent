@@ -11,6 +11,7 @@ override's effect also asserts the recorded coverage file is untouched.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 
@@ -308,3 +309,111 @@ def test_approval_blockers_combines_all_three_without_short_circuit(tmp_path):
     assert any("S03" in b for b in blockers)
     assert "effective coverage 4/5 is below required 5/5" in blockers
     assert any("A1" in b for b in blockers)
+
+
+# ---------------------------------------------------------------------------
+# record_approval
+# ---------------------------------------------------------------------------
+
+
+def _ready_controller(tmp_path) -> RunController:
+    """A controller at AWAITING_APPROVAL with 5/5 coverage and no open
+    grounding flags -- i.e. approval_blockers(1) == []."""
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    rows = _five_valid_rows()
+    _write_coverage(controller, 1, rows, {"BR01": ["S01", "S02", "S03", "S04", "S05"]})
+    return controller
+
+
+def test_record_approval_writes_exact_fields_once(tmp_path):
+    controller = _ready_controller(tmp_path)
+
+    record = controller.record_approval("APPROVE", "Chethan", 1, comment="Looks good")
+
+    on_disk = json.loads((controller.run_dir / "approval.json").read_text())
+    expected = {
+        "run_id": "r1",
+        "decision": "APPROVE",
+        "reviewer": "Chethan",
+        "comment": "Looks good",
+        "timestamp": on_disk["timestamp"],  # asserted shape separately below
+    }
+    assert on_disk == expected
+    assert record == expected
+    # RFC3339 UTC, matching resolve_grounding's existing convention.
+    assert on_disk["timestamp"].endswith("Z")
+    datetime.strptime(on_disk["timestamp"], "%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_record_approval_transitions_workflow_state_per_decision(tmp_path):
+    approve_controller = _ready_controller(tmp_path / "approve")
+    approve_controller.record_approval("APPROVE", "Chethan", 1)
+    assert approve_controller.workflow_state == "APPROVED"
+
+    reject_controller = _ready_controller(tmp_path / "reject")
+    reject_controller.record_approval("REJECT", "Chethan", 1)
+    assert reject_controller.workflow_state == "REJECTED"
+
+
+def test_record_approval_rejects_empty_reviewer(tmp_path):
+    controller = _ready_controller(tmp_path)
+    with pytest.raises(ValueError):
+        controller.record_approval("APPROVE", "   ", 1)
+    assert not (controller.run_dir / "approval.json").exists()
+
+
+def test_record_approval_rejects_unknown_decision(tmp_path):
+    controller = _ready_controller(tmp_path)
+    with pytest.raises(ValueError):
+        controller.record_approval("MAYBE", "Chethan", 1)
+
+
+def test_record_approval_rejects_second_call(tmp_path):
+    controller = _ready_controller(tmp_path)
+    controller.record_approval("APPROVE", "Chethan", 1)
+
+    # workflow_state is now APPROVED, not AWAITING_APPROVAL -- the state
+    # guard below would also catch a second call, but set it back to
+    # AWAITING_APPROVAL here so this test isolates the "already recorded"
+    # guard specifically, not the state guard.
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    with pytest.raises(ValueError):
+        controller.record_approval("APPROVE", "Someone Else", 1)
+
+
+def test_record_approval_rejects_outside_awaiting_approval(tmp_path):
+    controller = RunController("r1", tmp_path)  # defaults to PREPARING
+    rows = _five_valid_rows()
+    _write_coverage(controller, 1, rows, {"BR01": ["S01", "S02", "S03", "S04", "S05"]})
+
+    with pytest.raises(ValueError):
+        controller.record_approval("APPROVE", "Chethan", 1)
+    with pytest.raises(ValueError):
+        controller.record_approval("REJECT", "Chethan", 1)
+    assert not (controller.run_dir / "approval.json").exists()
+
+
+def test_record_approval_approve_requires_no_blockers(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    rows = _five_valid_rows()
+    rows[-1]["status"] = "MISSING"  # 4/5 -> approval_blockers(1) non-empty
+    _write_coverage(controller, 1, rows, {"BR01": ["S01", "S02", "S03", "S04"]})
+
+    with pytest.raises(ValueError):
+        controller.record_approval("APPROVE", "Chethan", 1)
+    assert not (controller.run_dir / "approval.json").exists()
+
+
+def test_record_approval_reject_allowed_despite_blockers(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    rows = _five_valid_rows()
+    rows[-1]["status"] = "MISSING"  # 4/5 -> approval_blockers(1) non-empty
+    _write_coverage(controller, 1, rows, {"BR01": ["S01", "S02", "S03", "S04"]})
+
+    controller.record_approval("REJECT", "Chethan", 1)  # must not raise
+
+    assert controller.workflow_state == "REJECTED"
+    assert json.loads((controller.run_dir / "approval.json").read_text())["decision"] == "REJECT"

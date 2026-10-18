@@ -41,6 +41,7 @@ WORKFLOW_STATES = {
 # assertion in set_workflow_state has the full, correct vocabulary from docs/05.
 
 GROUNDING_RESOLUTIONS = {"CONFIRMED_GROUNDED", "CONFIRMED_NOT_GROUNDED"}
+APPROVAL_DECISIONS = {"APPROVE", "REJECT"}
 
 
 class RunController:
@@ -293,6 +294,48 @@ class RunController:
                     )
 
         return blockers
+
+    # -- human approval ---------------------------------------------------
+    #
+    # No prior approve/reject/approval.json code exists anywhere in this
+    # codebase (checked) -- this is the first write path for it. Guards are
+    # enforced here, not only in the UI, matching every other single-write/
+    # state-gated RunController method (resolve_grounding, use_remediation,
+    # etc.): the UI's disabled buttons are a convenience, this is the
+    # backstop.
+
+    def record_approval(
+        self, decision: str, reviewer: str, scenario_set_version: int, comment: str | None = None
+    ) -> dict:
+        if decision not in APPROVAL_DECISIONS:
+            raise ValueError(f"unknown decision {decision!r}")
+        if not reviewer or not reviewer.strip():
+            raise ValueError("reviewer name is required")
+        if self.workflow_state != "AWAITING_APPROVAL":
+            raise ValueError(
+                f"record_approval requires workflow_state AWAITING_APPROVAL, got {self.workflow_state!r}"
+            )
+        if decision == "APPROVE":
+            blockers = self.approval_blockers(scenario_set_version)
+            if blockers:
+                raise ValueError(f"cannot APPROVE with open blockers: {blockers}")
+        if (self.run_dir / "approval.json").exists():
+            raise ValueError("approval already recorded for this run")
+
+        record = {
+            "run_id": self.run_id,
+            "decision": decision,
+            "reviewer": reviewer.strip(),
+            "comment": comment,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        self.save_evidence("approval.json", record)
+        self.set_workflow_state(
+            "APPROVED" if decision == "APPROVE" else "REJECTED",
+            stage="APPROVED" if decision == "APPROVE" else "REJECTED",
+            busy=False,
+        )
+        return record
 
     def save_evidence(self, name: str, data: dict) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
