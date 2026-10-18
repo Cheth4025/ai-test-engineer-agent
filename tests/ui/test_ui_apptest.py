@@ -632,6 +632,29 @@ def test_scenarios_page_gherkin_tabs_one_per_scenario(monkeypatch, tmp_path, ui_
 # ---------------------------------------------------------------------------
 
 
+def test_execution_inputs_locked_when_not_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
+    """Reviewer name/Comment must be locked the same way the buttons
+    already are -- previously only the buttons checked workflow_state ==
+    AWAITING_APPROVAL (via can_approve/can_reject); the inputs stayed
+    editable even before a run reached that state."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)
+    controller.set_workflow_state("PREPARING", stage="PREPARING", busy=False)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "text_input", "Reviewer name"))
+
+    assert not at.exception
+    reviewer_input = next(t for t in at.text_input if t.label == "Reviewer name")
+    comment_input = next(t for t in at.text_input if t.label == "Comment (optional)")
+    assert reviewer_input.disabled is True
+    assert comment_input.disabled is True
+    assert any("Locked until the run reaches AWAITING_APPROVAL" in w.value for w in at.warning)
+
+
 def test_execution_approve_requires_reviewer_name(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_remediated_run(tmp_path)

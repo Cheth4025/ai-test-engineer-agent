@@ -541,11 +541,13 @@ def gather_display_data(state: UIState) -> dict:
 # Streamlit-rendered, position:fixed markdown block layered on top of the
 # header (still zero JS: just HTML/CSS via st.markdown(unsafe_allow_html=
 # True), re-rendered fresh every fragment tick with real Python values).
-# Padding is deliberately NOT done here: theme.paddingTop/
-# theme.sidebar.paddingTop in .streamlit/config.toml is the native,
-# officially-recommended mechanism (Streamlit's own guidance is to avoid
-# CSS .block-container padding), and already reserves space for the
-# header's height automatically.
+# Vertical .block-container padding stays native: theme.paddingTop/
+# theme.sidebar.paddingTop/theme.paddingBottom in .streamlit/config.toml
+# (reduced there for the tightened layout) are the officially-recommended
+# mechanism and already reserve space for the header's height
+# automatically -- stacking CSS padding-top on top of that would double it.
+# Side padding and max-width have no native theme equivalent, so those are
+# CSS here, per the explicit "CSS only" layout-tightening request.
 _BASE_CSS = """
 <style>
 [data-testid="stHeader"] {
@@ -597,6 +599,71 @@ _BASE_CSS = """
     background-color: #E5E7EB !important;
     color: #9CA3AF !important;
     border-color: #D1D5DB !important;
+}
+
+/* -- Sidebar: narrow, tight nav (width/min/max pinned to disable the drag
+   handle at a size wider than the nav labels need) -- */
+[data-testid="stSidebar"] {
+    width: 240px !important;
+    min-width: 240px !important;
+    max-width: 240px !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 6px !important;
+}
+[class*="st-key-nav_"] button {
+    height: 40px !important;
+}
+[class*="st-key-nav_"] button > div {
+    justify-content: flex-start !important;
+}
+
+/* -- Main content: fill the page. Vertical padding is native (config.toml);
+   side padding/max-width have no theme equivalent. -- */
+.block-container {
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+    max-width: 100% !important;
+}
+
+/* -- Typography -- */
+.block-container h1 {
+    font-size: 30px !important;
+}
+[data-testid="stCaptionContainer"] p {
+    font-size: 15px !important;
+}
+/* :not() excludes .aite-card-heading's own <p> -- without it this rule's
+   higher specificity (class + attribute + tag) would win over the
+   heading's single-class rule below despite both using !important. */
+.block-container [data-testid="stMarkdownContainer"] p:not(.aite-card-heading) {
+    font-size: 15px !important;
+}
+.aite-card-heading {
+    font-size: 17px !important;
+    font-weight: 600 !important;
+    margin: 0 0 0.5rem 0 !important;
+}
+.block-container [data-testid="stTable"] * {
+    font-size: 14px !important;
+}
+
+/* -- Cards: tighter inner padding. No official data-testid distinguishes a
+   bordered st.container from an unbordered one in this Streamlit build
+   (1.66.0) -- verified directly that every st.container(border=True) here
+   renders with this exact emotion-cache class; unbordered wrapper blocks
+   use a different one and are unaffected. Version-pinned and somewhat
+   fragile (an internal, auto-generated class name): re-verify this
+   selector by inspecting a card's computed class if Streamlit is ever
+   upgraded. -- */
+.block-container .st-emotion-cache-1te8eqs {
+    padding: 10px !important;
+}
+/* Vertical gap between stacked blocks in the main content column (title
+   row -> card row -> card row, same spirit as the sidebar's 6px gap
+   above) -- helps the Overview page fit on one 1080p screen. */
+.block-container > [data-testid="stVerticalBlock"] {
+    gap: 10px !important;
 }
 </style>
 """
@@ -678,6 +745,16 @@ def _render_page_header(title: str) -> None:
     st.caption("Payment Retry & Duplicate Charge Prevention")
 
 
+def _card_heading(text: str, *, prefix: str = "") -> None:
+    """A section heading inside a bordered card, styled via the
+    .aite-card-heading CSS class rather than plain "**bold**" markdown --
+    several pages also use inline bold field labels (e.g. "**Checkpoint:**")
+    at body-text size, so a card heading needs its own distinct class to be
+    sized independently without a blanket rule touching those too."""
+    prefix_html = f"{html.escape(prefix)} " if prefix else ""
+    st.markdown(f'<p class="aite-card-heading">{prefix_html}{html.escape(text)}</p>', unsafe_allow_html=True)
+
+
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
     pending = controller.pending_decision
     st.subheader("Confirm decision")
@@ -747,7 +824,7 @@ _AGENT_STEPS = [
 def _render_page_requirements(state: UIState, data: dict) -> None:
     controller: RunController | None = data["controller"]
 
-    header_col, button_col = st.columns([4, 1])
+    header_col, button_col = st.columns([4, 1], vertical_alignment="center")
     with header_col:
         _render_page_header("Overview")
     with button_col:
@@ -763,12 +840,12 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
 
     col1, col2 = st.columns(2)
     with col1, st.container(border=True):
-        st.markdown("**The use case**")
+        _card_heading("The use case")
         st.markdown(f"**PROBLEM**  \n{_USE_CASE_PROBLEM}")
         st.markdown(f"**IMPACT**  \n{_USE_CASE_IMPACT}")
         st.markdown(f"**MITIGATION**  \n{_USE_CASE_MITIGATION}")
     with col2, st.container(border=True):
-        st.markdown("**Business rules (BR01 – BR06)**")
+        _card_heading("Business rules (BR01 – BR06)")
         requirement = data["requirement"] or {}
         rules = parse_business_rules(requirement.get("text"))
         st.table([{"ID": r["rule_id"], "Rule": r["label"], "Description": r["description"]} for r in rules])
@@ -776,11 +853,11 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
 
     col3, col4 = st.columns(2)
     with col3, st.container(border=True):
-        st.markdown("**Key acceptance criteria**")
+        _card_heading("Key acceptance criteria")
         for item in _ACCEPTANCE_CRITERIA:
             st.markdown(f"- {item}")
     with col4, st.container(border=True):
-        st.markdown("**What the agent does**")
+        _card_heading("What the agent does")
         for index, step in enumerate(_AGENT_STEPS, start=1):
             st.markdown(f"{index}. {step}")
 
@@ -867,7 +944,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
     col_left, col_right = st.columns(2)
 
     with col_left, st.container(border=True):
-        st.markdown("**Generated scenarios**")
+        _card_heading("Generated scenarios")
         version_ids = [entry["version"] for entry in versions_list]
         selected_version = st.segmented_control(
             "Scenario set version",
@@ -909,7 +986,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                         st.rerun()
 
     with col_right, st.container(border=True):
-        st.markdown("**Coverage**")
+        _card_heading("Coverage")
         donut_entries = [entry for entry in versions_list if entry["effective_coverage"] is not None]
         if len(donut_entries) >= 2:
             before_entry, after_entry = donut_entries[0], donut_entries[-1]
@@ -945,7 +1022,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
         gap_col, decider_col = st.columns(2)
         if gap_entry is not None:
             with gap_col, st.container(border=True):
-                st.markdown("⚠️ **Gap found by coverage check**")
+                _card_heading("Gap found by coverage check", prefix="⚠️")
                 coverage = gap_entry["effective_coverage"]
                 catalog = (_load_json(CONFIG_DIR / "scenario_catalog.json") or {}).get("scenarios", {})
                 for row in coverage["rows"]:
@@ -960,7 +1037,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                 )
         if coverage_decisions:
             with decider_col, st.container(border=True):
-                st.markdown("✅ **Strands Decider (2B) decision**")
+                _card_heading("Strands Decider (2B) decision", prefix="✅")
                 for record in coverage_decisions:
                     confidence = record.get("confidence")
                     threshold = record.get("threshold")
@@ -977,7 +1054,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                     st.divider()
 
     with st.container(border=True):
-        st.markdown("**Gherkin**")
+        _card_heading("Gherkin")
         if scenarios:
             tabs = st.tabs([f"{s['scenario_id']} · {s['title']}" for s in scenarios])
             for tab, scenario in zip(tabs, scenarios):
@@ -1009,7 +1086,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
     col1, col2 = st.columns(2)
 
     with col1, st.container(border=True):
-        st.markdown("**Test manifest (fixed)**")
+        _card_heading("Test manifest (fixed)")
         manifest = (_load_json(CONFIG_DIR / "test_manifest.json") or {}).get("tests", [])
         catalog = (_load_json(CONFIG_DIR / "scenario_catalog.json") or {}).get("scenarios", {})
         per_scenario_assertions = {
@@ -1036,7 +1113,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             st.caption("All tests also check: " + ", ".join(format_assertion(a) for a in shared) + ".")
 
     with col2, st.container(border=True):
-        st.markdown("**Human approval**")
+        _card_heading("Human approval")
         approval = _load_json(controller.run_dir / "approval.json") if controller is not None else None
 
         if approval is not None:
@@ -1058,19 +1135,27 @@ def _render_page_execution(state: UIState, data: dict) -> None:
         else:
             versions_list = data.get("versions", [])
             latest_version = versions_list[-1]["version"] if versions_list else None
-            blockers = (
-                controller.approval_blockers(latest_version)
-                if controller is not None and latest_version is not None
-                else ["No run yet."]
-            )
+            # Buttons were already gated on workflow_state == AWAITING_APPROVAL
+            # via can_approve/can_reject; the inputs weren't -- they stayed
+            # editable even before a run reached that state, which doesn't
+            # match the buttons' own lock. Same reason, same caption, now
+            # for both.
+            execution_unlocked = controller is not None and controller.workflow_state == "AWAITING_APPROVAL"
+            if controller is None:
+                blockers = ["No run yet."]
+            elif not execution_unlocked:
+                blockers = [f"Locked until the run reaches AWAITING_APPROVAL (currently {controller.workflow_state})."]
+            else:
+                blockers = controller.approval_blockers(latest_version) if latest_version is not None else []
+
             if not blockers:
                 st.success("Ready for approval — coverage 5/5, no open grounding flags.")
             else:
                 for blocker in blockers:
                     st.warning(blocker)
 
-            reviewer = st.text_input("Reviewer name", key="reviewer_name")
-            comment = st.text_input("Comment (optional)", key="approval_comment")
+            reviewer = st.text_input("Reviewer name", key="reviewer_name", disabled=not execution_unlocked)
+            comment = st.text_input("Comment (optional)", key="approval_comment", disabled=not execution_unlocked)
             st.caption("Approval time is stamped automatically and saved to approval.json.")
 
             approve_ready = can_approve(state, controller, reviewer, latest_version)
@@ -1105,7 +1190,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                 st.rerun()
 
     with st.container(border=True):
-        st.markdown("**Test run**")
+        _card_heading("Test run")
         st.info("Results appear here after execution (Milestone 6).")
 
 
