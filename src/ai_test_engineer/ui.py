@@ -39,6 +39,7 @@ forever.
 
 from __future__ import annotations
 
+import html
 import json
 import statistics
 import threading
@@ -46,6 +47,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 
 from ai_test_engineer import checkpoints, orchestration
@@ -53,19 +56,23 @@ from ai_test_engineer.state import RunController
 
 CONFIG_DIR = orchestration.CONFIG_DIR
 
-SECTIONS = [
-    "Overview & Requirements",
-    "Scenarios & Coverage",
-    "Approval & Execution",
-    "Results & Report",
+# (nav id, label, Material icon name). IDs are stable identifiers used for
+# st.session_state/keys; labels are what's shown. docs/mockups/README.md
+# row 1 (owner-approved layout change): icon + label nav, not tabs/radio.
+NAV_ITEMS = [
+    ("requirements", "Overview", "description"),
+    ("scenarios", "Scenarios", "list"),
+    ("execution", "Execution", "play_arrow"),
+    ("results", "Results", "bar_chart"),
 ]
+NAV_LABELS = {item_id: label for item_id, label, _icon in NAV_ITEMS}
 
-# Which section owns the Confirm decision control for a given pending
+# Which page owns the Confirm decision control for a given pending
 # checkpoint tool -- the sidebar points the user there when a decision is
-# awaiting confirmation but they're looking at a different section.
+# awaiting confirmation but they're looking at a different page.
 PENDING_SECTION_FOR_TOOL = {
-    "generate_scenarios": SECTIONS[0],
-    "save_scenario_set": SECTIONS[1],
+    "generate_scenarios": "requirements",
+    "save_scenario_set": "scenarios",
 }
 
 # Doc 06's two escalation checkpoints and their fixed option sets -- same
@@ -436,6 +443,30 @@ def split_shared_assertions(
     return shared, remainder
 
 
+def format_assertion(assertion: dict) -> str:
+    """A real required_assertions tuple rendered compactly -- real data
+    only, no invented short phrase (resolved with the user)."""
+    operator = "precedes" if assertion["operator"] == "PRECEDES" else "=="
+    return f"{assertion['observation']} {operator} {assertion['expected']}"
+
+
+def decider_decision_value(record: dict) -> str:
+    """The real bounded-action choice (e.g. ACCEPT_COVERAGE/REMEDIATE_GAP),
+    not selected_action's "Proceed"/Deny-reason text. Traced through
+    checkpoints.py: for decision_source DECIDER/REUSED, selected_action is
+    "Proceed" on acceptance or a free-text Deny reason otherwise -- never
+    the bounded choice itself. The real choice for those sources lives in
+    per_question's "coverage_action" entry's "answer" field. For
+    HUMAN_ESCALATION, selected_action already IS the human's literal
+    choice string, so it's used directly."""
+    if record.get("decision_source") == "HUMAN_ESCALATION":
+        return record.get("selected_action") or "—"
+    for question in record.get("per_question") or []:
+        if question.get("question") == "coverage_action" and question.get("answer") is not None:
+            return question["answer"]
+    return record.get("selected_action") or "—"
+
+
 def _host_label() -> str:
     decider_cfg = _load_json(CONFIG_DIR / "decider.json") or {}
     try:
@@ -502,15 +533,20 @@ def gather_display_data(state: UIState) -> dict:
 # Rendering -- Streamlit-dependent; exercised by tests/ui/test_ui_apptest.py.
 # ---------------------------------------------------------------------------
 
-# Top-bar text and Approve/Reject's fixed colors have no [theme]/[theme.sidebar]
-# config equivalent (theme options style the main area and sidebar, never
-# Streamlit's own header chrome, and there's no per-button color option) --
-# both are explicitly requested as scoped CSS. Padding is deliberately NOT
-# done here: theme.paddingTop/theme.sidebar.paddingTop in .streamlit/config.toml
-# is the native, officially-recommended mechanism (Streamlit's own guidance
-# is to avoid CSS .block-container padding), and already reserves space for
-# the header's height automatically.
-_CSS = """
+# Top-bar text/chips and Approve/Reject's fixed colors have no [theme]/
+# [theme.sidebar] config equivalent (theme options style the main area and
+# sidebar, never Streamlit's own header chrome, and there's no per-button
+# color option, nor a way to put real-time text into the header without
+# JavaScript) -- all explicitly requested as scoped CSS plus a real
+# Streamlit-rendered, position:fixed markdown block layered on top of the
+# header (still zero JS: just HTML/CSS via st.markdown(unsafe_allow_html=
+# True), re-rendered fresh every fragment tick with real Python values).
+# Padding is deliberately NOT done here: theme.paddingTop/
+# theme.sidebar.paddingTop in .streamlit/config.toml is the native,
+# officially-recommended mechanism (Streamlit's own guidance is to avoid
+# CSS .block-container padding), and already reserves space for the
+# header's height automatically.
+_BASE_CSS = """
 <style>
 [data-testid="stHeader"] {
     background-color: #0F1B2D;
@@ -524,6 +560,23 @@ _CSS = """
     color: #F5F5F5;
     font-size: 1.15rem;
     font-weight: 600;
+    white-space: nowrap;
+}
+.aite-status-chips {
+    position: fixed;
+    top: 0.6rem;
+    right: 1rem;
+    z-index: 999999;
+    display: flex;
+    gap: 0.5rem;
+}
+.aite-chip {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #F5F5F5;
+    font-family: monospace;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
     white-space: nowrap;
 }
 .st-key-approve_btn button {
@@ -549,41 +602,80 @@ _CSS = """
 """
 
 
-def _inject_css() -> None:
-    st.markdown(_CSS, unsafe_allow_html=True)
+def _nav_css(current_nav_id: str) -> str:
+    """Highlights the currently-selected sidebar nav button: lighter navy
+    background + 3px teal left bar. Uses the .st-key-<key> hook Streamlit
+    documents for exactly this (same mechanism as Approve/Reject's colors
+    above) -- current_nav_id is read from st.session_state before this is
+    injected, so it's always correct for the render about to happen."""
+    return f"""
+    <style>
+    .st-key-nav_{current_nav_id} button {{
+        background-color: #1D3150 !important;
+        border-left: 3px solid #2DD4BF !important;
+    }}
+    </style>
+    """
 
 
-def _render_sidebar(state: UIState, data: dict) -> str:
-    """Run status + navigation, all in the dark left sidebar (docs/mockups/
-    README.md row 1, owner-approved layout change -- see module docstring).
-    Navigation is a plain st.radio: selecting a section is read-only and
-    never calls start_analysis/confirm_decision, same guarantee the former
-    st.tabs gave (tests/ui/test_ui_apptest.py's reload-safety test covers
-    this directly)."""
+def _inject_css(current_nav_id: str) -> None:
+    st.markdown(_BASE_CSS, unsafe_allow_html=True)
+    st.markdown(_nav_css(current_nav_id), unsafe_allow_html=True)
+
+
+def _render_top_bar_chips(data: dict) -> None:
+    """Three monospace pill chips, top-right of the header: run id,
+    state · stage, Decider host. Real Streamlit-rendered HTML (not JS),
+    position:fixed so it visually layers onto the header bar, re-rendered
+    fresh every fragment tick with current values. Every run-derived value
+    is html.escape()'d before going into this unsafe_allow_html block."""
+    controller: RunController | None = data["controller"]
+    if controller is not None:
+        run_chip = f"run {controller.run_id}"
+        state_chip = f"{controller.workflow_state} · {controller.stage}"
+    else:
+        run_chip = "run (none)"
+        state_chip = "no run"
+    host_chip = f"Decider · {data['host_label']}"
+    spans = "".join(
+        f'<span class="aite-chip">{html.escape(text)}</span>' for text in (run_chip, state_chip, host_chip)
+    )
+    st.markdown(f'<div class="aite-status-chips">{spans}</div>', unsafe_allow_html=True)
+
+
+def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
+    """Nav, Refresh status, and the pending-decision notice -- nothing else
+    (docs/mockups/README.md row 1, owner-approved layout change -- see
+    module docstring). Run status moved to the top-bar chips. Navigation is
+    st.button per item (no radio buttons): selecting a page is read-only
+    and never calls start_analysis/confirm_decision, same guarantee the
+    former tabs/radio gave (tests/ui/test_ui_apptest.py's reload-safety
+    test covers this directly)."""
     controller: RunController | None = data["controller"]
     with st.sidebar:
-        st.caption("Payment Retry & Duplicate Charge Prevention")
-        st.metric("Run ID", controller.run_id if controller else "(none)")
-        workflow_state = controller.workflow_state if controller else "(no run)"
-        stage = controller.stage if controller else "(no run)"
-        st.metric("Workflow state", workflow_state, help=f"stage: {stage}")
-        busy = state.worker_busy or (controller.busy if controller else False)
-        st.metric("Decider host", data["host_label"], help="busy" if busy else "idle")
-        if busy:
-            st.info("Working...")
-        if state.last_error:
-            st.error(f"Last run failed: {state.last_error}")
-        if st.button("Refresh Status", type="secondary"):
-            st.rerun()
-
-        if controller is not None and controller.pending_decision is not None:
-            target_section = PENDING_SECTION_FOR_TOOL.get(controller.pending_decision.get("tool_name"))
-            if target_section is not None:
-                st.warning(f"A decision needs your confirmation -- see '{target_section}'.")
+        for item_id, label, icon in NAV_ITEMS:
+            if st.button(label, key=f"nav_{item_id}", icon=f":material/{icon}:", width="stretch"):
+                st.session_state["nav_id"] = item_id
+                current_nav_id = item_id
 
         st.divider()
-        section = st.radio("Navigation", SECTIONS, key="nav_section")
-    return section
+        if st.button(
+            "Refresh status", type="secondary", icon=":material/refresh:", width="stretch"
+        ):
+            st.rerun()
+        if state.last_error:
+            st.error(f"Last run failed: {state.last_error}")
+
+        if controller is not None and controller.pending_decision is not None:
+            target_id = PENDING_SECTION_FOR_TOOL.get(controller.pending_decision.get("tool_name"))
+            if target_id is not None:
+                st.warning(f"A decision needs your confirmation — see '{NAV_LABELS[target_id]}'.")
+    return current_nav_id
+
+
+def _render_page_header(title: str) -> None:
+    st.title(title)
+    st.caption("Payment Retry & Duplicate Charge Prevention")
 
 
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
@@ -618,187 +710,440 @@ def _render_confirm_decision(state: UIState, controller: RunController) -> None:
         st.rerun()
 
 
-def _render_section_overview(state: UIState, data: dict) -> None:
-    requirement = data["requirement"] or {}
+# ---------------------------------------------------------------------------
+# Page "requirements" (Overview) -- static UI copy (explicitly requested
+# verbatim, not run data) plus the real BR table.
+# ---------------------------------------------------------------------------
+
+_USE_CASE_PROBLEM = (
+    # Escaped \$ -- a bare "$100 ... $200" is parsed as inline LaTeX math by
+    # st.markdown (caught visually: rendered as a code/math block instead
+    # of plain text).
+    "A customer pays \\$100 once. The gateway re-sends its success callback, "
+    "the store records it twice, and the books show \\$200."
+)
+_USE_CASE_IMPACT = "Inflated revenue, failed reconciliations, and wrong refunds or orders shipped twice."
+_USE_CASE_MITIGATION = (
+    "The AI Test Engineer Agent builds and runs the tests; the Strands Decider "
+    "checks each key decision so no scenario is missed. Test T04 catches the "
+    "duplicate (expected 1 ledger entry, found 2) before it reaches production."
+)
+_ACCEPTANCE_CRITERIA = [
+    "Handle payment timeouts and retries",
+    "Use idempotency to prevent duplicate charges",
+    "Reject conflicting requests with the same key",
+    "Process delayed confirmations",
+    "Duplicate callbacks never create extra ledger entries",
+]
+_AGENT_STEPS = [
+    "Reads the requirement and extracts the rules (BR01–BR06).",
+    "Generates Gherkin test scenarios (initial set).",
+    "Checks coverage and finds the missing scenario.",
+    "Asks the Strands Decider (2B) to pick a bounded action — REMEDIATE_GAP adds S04.",
+    "Waits for human approval, runs T01–T05 once, and reports the result. It never fixes code.",
+]
+
+
+def _render_page_requirements(state: UIState, data: dict) -> None:
     controller: RunController | None = data["controller"]
 
-    st.caption(
-        f"requirement_id: {requirement.get('requirement_id')} | "
-        f"source_version: {requirement.get('source_version')} | "
-        f"source_hash: {requirement.get('source_hash')} | "
-        f"authority_file_sha256: {requirement.get('authority_file_sha256')}"
-    )
+    header_col, button_col = st.columns([4, 1])
+    with header_col:
+        _render_page_header("Overview")
+    with button_col:
+        label = "New Analysis" if state.current_run_id is not None else "Start analysis"
+        if st.button(
+            label,
+            type="primary",
+            key="start_or_new_analysis_btn",
+            disabled=not can_start_analysis(state, controller),
+        ):
+            start_analysis(state)
+            st.rerun()
 
-    # Doc 06 Section 2 / mockup deviation #3: always show the exact bundled
-    # BR01-BR06 text, never only the model's paraphrase of it.
-    st.text(requirement.get("text", "(requirement not loaded)"))
+    col1, col2 = st.columns(2)
+    with col1, st.container(border=True):
+        st.markdown("**The use case**")
+        st.markdown(f"**PROBLEM**  \n{_USE_CASE_PROBLEM}")
+        st.markdown(f"**IMPACT**  \n{_USE_CASE_IMPACT}")
+        st.markdown(f"**MITIGATION**  \n{_USE_CASE_MITIGATION}")
+    with col2, st.container(border=True):
+        st.markdown("**Business rules (BR01 – BR06)**")
+        requirement = data["requirement"] or {}
+        rules = parse_business_rules(requirement.get("text"))
+        st.table([{"ID": r["rule_id"], "Rule": r["label"], "Description": r["description"]} for r in rules])
+        st.caption("Loaded from the requirements catalog.")
 
-    interpretation = data.get("interpretation")
-    if interpretation is not None:
-        with st.expander("Interpreted rules & ambiguities"):
-            for rule in interpretation.get("rules", []):
-                st.write(f"**{rule['rule_id']}**: {rule['meaning']}")
-            for ambiguity in interpretation.get("ambiguities", []):
-                label = "CRITICAL" if ambiguity.get("critical") else "non-critical"
-                st.write(f"- ({label}, {ambiguity.get('status')}) {ambiguity.get('question')}")
-
-    label = "New Analysis" if state.current_run_id is not None else "Start Analysis"
-    if st.button(
-        label, type="primary", key="start_or_new_analysis_btn", disabled=not can_start_analysis(state, controller)
-    ):
-        start_analysis(state)
-        st.rerun()
+    col3, col4 = st.columns(2)
+    with col3, st.container(border=True):
+        st.markdown("**Key acceptance criteria**")
+        for item in _ACCEPTANCE_CRITERIA:
+            st.markdown(f"- {item}")
+    with col4, st.container(border=True):
+        st.markdown("**What the agent does**")
+        for index, step in enumerate(_AGENT_STEPS, start=1):
+            st.markdown(f"{index}. {step}")
 
     if controller is not None and controller.stage == "AWAITING_CLARIFICATION":
         st.warning("Run is paused awaiting clarification on a critical ambiguity.")
         st.text_area("Submit clarification", disabled=True, placeholder="Not implemented in this milestone.")
         st.button("Submit clarification", disabled=True)
 
-    if controller is not None and controller.stage == "AWAITING_DECISION_CONFIRMATION" \
-            and controller.pending_decision is not None \
-            and controller.pending_decision.get("tool_name") == "generate_scenarios":
+    if (
+        controller is not None
+        and controller.stage == "AWAITING_DECISION_CONFIRMATION"
+        and controller.pending_decision is not None
+        and controller.pending_decision.get("tool_name") == "generate_scenarios"
+    ):
         _render_confirm_decision(state, controller)
 
     if controller is not None and controller.workflow_state in {"BLOCKED", "STOPPED"}:
         st.error(f"Run {controller.workflow_state}: {controller.halt_reason or '(no reason recorded)'}")
 
 
-def _render_coverage_table(label: str, coverage: dict) -> None:
-    st.caption(f"{label}: {coverage['covered']}/{coverage['required']} ({coverage['percentage']}%)")
-    st.table(
-        [
-            {"scenario_id": r["scenario_id"], "status": r["status"], "findings": "; ".join(r["findings"])}
-            for r in coverage["rows"]
-        ]
+# ---------------------------------------------------------------------------
+# Page "scenarios" (Scenarios)
+# ---------------------------------------------------------------------------
+
+
+def _render_coverage_donut(coverage: dict, caption: str) -> None:
+    covered = coverage["covered"]
+    required = coverage["required"]
+    missing = max(required - covered, 0)
+    frame = pd.DataFrame({"category": ["Covered", "Missing"], "count": [covered, missing]})
+    arc = (
+        alt.Chart(frame)
+        .mark_arc(innerRadius=55, outerRadius=85)
+        .encode(
+            theta="count:Q",
+            color=alt.Color(
+                "category:N",
+                scale=alt.Scale(domain=["Covered", "Missing"], range=["#0D9488", "#FCA5A5"]),
+                legend=alt.Legend(title=None, orient="bottom"),
+            ),
+        )
     )
+    center_text = (
+        alt.Chart(pd.DataFrame({"text": [f"{coverage['percentage']:g}%"]}))
+        .mark_text(size=22, fontWeight="bold")
+        .encode(text="text:N")
+    )
+    st.altair_chart(alt.layer(arc, center_text).properties(width=170, height=170))
+    st.caption(f"{caption} · {covered} of {required}")
 
 
-def _render_section_scenarios(state: UIState, data: dict) -> None:
+def _render_scenarios_table(scenarios: list[dict], grounding_items: dict, added_ids: set[str]) -> None:
+    rows = []
+    for scenario in scenarios:
+        grounding_item = grounding_items.get(scenario["scenario_id"])
+        status = "—"
+        if grounding_item is not None:
+            status = grounding_item.get("human_resolution") or grounding_item.get("verdict") or "—"
+        scenario_label = scenario["title"]
+        if scenario["scenario_id"] in added_ids:
+            scenario_label += "  —  Added by remediation"
+        rows.append(
+            {
+                "ID": scenario["scenario_id"],
+                "Scenario": scenario_label,
+                "Rules": ", ".join(scenario.get("rule_ids", [])),
+                "Status": status,
+            }
+        )
+    st.table(rows)
+
+
+def _render_page_scenarios(state: UIState, data: dict) -> None:
+    _render_page_header("Scenarios")
     controller: RunController | None = data["controller"]
-    if controller is None:
-        st.info("No run yet.")
+    versions_list = data.get("versions", [])
+    if controller is None or not versions_list:
+        st.info("Start analysis to generate scenarios.")
         return
 
-    versions_list = data.get("versions", [])
-    latest_version = versions_list[-1]["version"] if versions_list else None
+    latest_version = versions_list[-1]["version"]
+    by_version = {entry["version"]: entry for entry in versions_list}
 
-    for entry in versions_list:
-        version = entry["version"]
-        st.markdown(f"#### Scenario set v{version}")
-        if version == 1:
-            st.caption("S04 is deliberately omitted from this pass (seeded omission).")
+    col_left, col_right = st.columns(2)
 
-        scenario_set = entry["scenarios"]
-        if scenario_set:
-            for scenario in scenario_set.get("scenarios", []):
-                with st.expander(f"{scenario['scenario_id']} -- {scenario['title']}"):
-                    st.code(scenario.get("gherkin", ""), language="gherkin")
+    with col_left, st.container(border=True):
+        st.markdown("**Generated scenarios**")
+        version_ids = [entry["version"] for entry in versions_list]
+        selected_version = st.segmented_control(
+            "Scenario set version",
+            version_ids,
+            format_func=lambda v: f"v{v} · {'initial' if v == 1 else 'remediated'}",
+            default=latest_version,
+            label_visibility="collapsed",
+            key="scenarios_version_select",
+        )
+        if selected_version is None:
+            selected_version = latest_version
+        entry = by_version[selected_version]
+        scenario_set = entry["scenarios"] or {}
+        scenarios = scenario_set.get("scenarios", [])
+        grounding_items = {item["scenario_id"]: item for item in (entry["grounding"] or {}).get("items", [])}
+        previous_entry = by_version.get(selected_version - 1)
+        previous_scenarios = (previous_entry["scenarios"] or {}).get("scenarios") if previous_entry else None
+        added_ids = added_by_remediation(previous_scenarios, scenarios)
 
-        grounding = entry["grounding"]
-        if grounding:
-            for item in grounding.get("items", []):
-                st.write(
-                    f"{item['scenario_id']}: {item['verdict']} (confidence {item.get('confidence')}) "
-                    f"human_resolution={item.get('human_resolution')}"
-                )
+        _render_scenarios_table(scenarios, grounding_items, added_ids)
+        if selected_version == 1:
+            st.caption("From scenarios_v1.json. S04 is deliberately omitted from this pass (seeded omission).")
+        else:
+            st.caption(f"From scenarios_v{selected_version}.json.")
 
-        # Resolve only applies to the latest version -- an older version's
-        # flag is superseded once a newer scenario set exists.
-        if version == latest_version:
+        if selected_version == latest_version:
             for scenario_id in entry["unresolved_grounding"]:
-                with st.form(key=f"resolve_{version}_{scenario_id}"):
+                with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
                     st.write(f"Resolve grounding flag for {scenario_id}")
                     resolution = st.radio(
                         "Resolution",
                         ["CONFIRMED_GROUNDED", "CONFIRMED_NOT_GROUNDED"],
-                        key=f"res_{version}_{scenario_id}",
+                        key=f"res_{selected_version}_{scenario_id}",
                     )
-                    note = st.text_input("Note (optional)", key=f"note_{version}_{scenario_id}")
+                    note = st.text_input("Note (optional)", key=f"note_{selected_version}_{scenario_id}")
                     if st.form_submit_button("Resolve", type="secondary", disabled=state.worker_busy):
                         with state.lock:  # serialize against a worker thread writing the same run's files
-                            controller.resolve_grounding(version, scenario_id, resolution, note or None)
+                            controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
                         st.rerun()
 
-        recorded = entry["recorded_coverage"]
-        effective = entry["effective_coverage"]
-        if recorded is not None:
-            if effective != recorded:
-                col1, col2 = st.columns(2)
-                with col1:
-                    _render_coverage_table("Recorded (validator)", recorded)
-                with col2:
-                    _render_coverage_table("Effective (human-adjusted)", effective)
-            else:
-                _render_coverage_table("Coverage", recorded)
+    with col_right, st.container(border=True):
+        st.markdown("**Coverage**")
+        donut_entries = [entry for entry in versions_list if entry["effective_coverage"] is not None]
+        if len(donut_entries) >= 2:
+            before_entry, after_entry = donut_entries[0], donut_entries[-1]
+            donut_cols = st.columns([1, 0.3, 1])
+            with donut_cols[0]:
+                _render_coverage_donut(
+                    before_entry["effective_coverage"], f"Before · coverage_v{before_entry['version']}"
+                )
+            with donut_cols[1]:
+                st.markdown(
+                    "<div style='text-align:center; padding-top:4rem; font-size:1.5rem;'>→</div>",
+                    unsafe_allow_html=True,
+                )
+            with donut_cols[2]:
+                _render_coverage_donut(
+                    after_entry["effective_coverage"], f"After · coverage_v{after_entry['version']}"
+                )
+        elif len(donut_entries) == 1:
+            _render_coverage_donut(
+                donut_entries[0]["effective_coverage"], f"coverage_v{donut_entries[0]['version']}"
+            )
 
-    if controller.stage == "AWAITING_DECISION_CONFIRMATION" and controller.pending_decision is not None \
-            and controller.pending_decision.get("tool_name") == "save_scenario_set":
+    gap_entry = next(
+        (
+            entry
+            for entry in versions_list
+            if entry["effective_coverage"] and entry["effective_coverage"]["covered"] < entry["effective_coverage"]["required"]
+        ),
+        None,
+    )
+    coverage_decisions = [d for d in (data.get("decisions") or []) if d.get("checkpoint") == "COVERAGE"]
+    if gap_entry is not None or coverage_decisions:
+        gap_col, decider_col = st.columns(2)
+        if gap_entry is not None:
+            with gap_col, st.container(border=True):
+                st.markdown("⚠️ **Gap found by coverage check**")
+                coverage = gap_entry["effective_coverage"]
+                catalog = (_load_json(CONFIG_DIR / "scenario_catalog.json") or {}).get("scenarios", {})
+                for row in coverage["rows"]:
+                    if row["status"] == "VALID":
+                        continue
+                    title = catalog.get(row["scenario_id"], {}).get("title", "—")
+                    st.markdown(f"**Missing:** {row['scenario_id']} — {title}")
+                    st.markdown(f"**Uncovered rule:** {', '.join(row['rule_ids'])}")
+                st.markdown(
+                    f"**Coverage:** {coverage['covered']}/{coverage['required']} — "
+                    "below the 5/5 acceptance guard"
+                )
+        if coverage_decisions:
+            with decider_col, st.container(border=True):
+                st.markdown("✅ **Strands Decider (2B) decision**")
+                for record in coverage_decisions:
+                    confidence = record.get("confidence")
+                    threshold = record.get("threshold")
+                    source = record.get("decision_source")
+                    human_note = " (human answer)" if source == "HUMAN_ESCALATION" else ""
+                    st.markdown(f"Checkpoint: `{record.get('checkpoint')}`")
+                    st.markdown(f"Decision: `{decider_decision_value(record)}`")
+                    st.markdown(
+                        f"Confidence: {confidence if confidence is not None else '—'} "
+                        f"vs τ {threshold if threshold is not None else '—'}"
+                    )
+                    st.markdown(f"Route: {record.get('route')}{human_note}")
+                    st.markdown(f"Source: `{source}`")
+                    st.divider()
+
+    with st.container(border=True):
+        st.markdown("**Gherkin**")
+        if scenarios:
+            tabs = st.tabs([f"{s['scenario_id']} · {s['title']}" for s in scenarios])
+            for tab, scenario in zip(tabs, scenarios):
+                with tab:
+                    gherkin = scenario.get("gherkin")
+                    if gherkin:
+                        st.code(gherkin, language="gherkin")
+                    else:
+                        st.code("(no gherkin available)", language="text")
+
+    if (
+        controller.stage == "AWAITING_DECISION_CONFIRMATION"
+        and controller.pending_decision is not None
+        and controller.pending_decision.get("tool_name") == "save_scenario_set"
+    ):
         _render_confirm_decision(state, controller)
 
 
-def _render_section_approval(state: UIState, data: dict) -> None:
-    st.info("Approval & Execution is the next milestone -- NOT RUN.")
-    test_manifest = _load_json(CONFIG_DIR / "test_manifest.json") or {}
-    st.table(test_manifest.get("tests", []))
-    # Colors only (layout, no behavior change) -- all three stay disabled
-    # placeholders this milestone. Approve/Reject's green/red come from the
-    # .st-key-approve_btn/.st-key-reject_btn CSS rules in _CSS; Execute uses
-    # the plain primary teal like the other main actions.
-    st.button("Approve", key="approve_btn", disabled=True)
-    st.button("Reject", key="reject_btn", disabled=True)
-    st.button("Execute", type="primary", key="execute_btn", disabled=True)
+# ---------------------------------------------------------------------------
+# Page "execution" (Execution)
+# ---------------------------------------------------------------------------
 
 
-def _render_section_results(state: UIState, data: dict) -> None:
-    st.markdown("#### Decision audit")
-    records = data.get("decisions") or []
-    st.table(
-        [
-            {
-                "checkpoint": r.get("checkpoint"),
-                "suggestion": r.get("decider_suggestion"),
-                "selected_action": r.get("selected_action"),
-                "confidence": r.get("confidence"),
-                "route": r.get("route"),
-                "decision_source": r.get("decision_source"),
-                "latency_ms": r.get("latency_ms"),
-                "host_label": r.get("host_label"),
-            }
-            for r in records
-        ]
-    )
-    metrics = data.get("metrics") or {"decider_calls": 0, "median_latency_ms": None, "escalated": 0}
-    cols = st.columns(3)
-    cols[0].metric("Decider calls", metrics["decider_calls"])
-    cols[1].metric("Median latency (ms)", metrics["median_latency_ms"] or "n/a")
-    cols[2].metric("Escalated", metrics["escalated"])
+def _render_page_execution(state: UIState, data: dict) -> None:
+    _render_page_header("Execution")
+    st.caption("Approve, then execute the five fixed tests.")
+    controller: RunController | None = data["controller"]
 
-    st.markdown("#### Results & Report")
-    st.info("Results & Report is the next milestone -- NOT RUN.")
+    col1, col2 = st.columns(2)
+
+    with col1, st.container(border=True):
+        st.markdown("**Test manifest (fixed)**")
+        manifest = (_load_json(CONFIG_DIR / "test_manifest.json") or {}).get("tests", [])
+        catalog = (_load_json(CONFIG_DIR / "scenario_catalog.json") or {}).get("scenarios", {})
+        per_scenario_assertions = {
+            test["scenario_id"]: catalog.get(test["scenario_id"], {}).get("required_assertions", [])
+            for test in manifest
+        }
+        shared, remainder = split_shared_assertions(per_scenario_assertions)
+        rows = []
+        for test in manifest:
+            scenario_id = test["scenario_id"]
+            title = catalog.get(scenario_id, {}).get("title", "—")
+            specific = remainder.get(scenario_id, [])
+            expected = "; ".join(format_assertion(a) for a in specific) if specific else "shared checks only"
+            rows.append(
+                {
+                    "ID": test["test_id"],
+                    "Scenario": title,
+                    "Expected": expected,
+                    "Rules": ", ".join(test.get("rule_ids", [])),
+                }
+            )
+        st.table(rows)
+        if shared:
+            st.caption("All tests also check: " + ", ".join(format_assertion(a) for a in shared) + ".")
+
+    with col2, st.container(border=True):
+        st.markdown("**Human approval**")
+        approval = _load_json(controller.run_dir / "approval.json") if controller is not None else None
+
+        if approval is not None:
+            decision_label = "Approved" if approval["decision"] == "APPROVE" else "Rejected"
+            (st.success if approval["decision"] == "APPROVE" else st.error)(
+                f"{decision_label} by {approval['reviewer']} at {approval['timestamp']}"
+            )
+            if approval.get("comment"):
+                st.caption(f"Comment: {approval['comment']}")
+            button_cols = st.columns(3)
+            button_cols[0].button("Reject", key="reject_btn", icon=":material/lock:", disabled=True)
+            button_cols[1].button(
+                "Approve", type="primary", key="approve_btn", icon=":material/lock:", disabled=True
+            )
+            button_cols[2].button(
+                "Execute", type="primary", key="execute_btn", icon=":material/lock:", disabled=True
+            )
+            st.caption("Test execution arrives in Milestone 6.")
+        else:
+            versions_list = data.get("versions", [])
+            latest_version = versions_list[-1]["version"] if versions_list else None
+            blockers = (
+                controller.approval_blockers(latest_version)
+                if controller is not None and latest_version is not None
+                else ["No run yet."]
+            )
+            if not blockers:
+                st.success("Ready for approval — coverage 5/5, no open grounding flags.")
+            else:
+                for blocker in blockers:
+                    st.warning(blocker)
+
+            reviewer = st.text_input("Reviewer name", key="reviewer_name")
+            comment = st.text_input("Comment (optional)", key="approval_comment")
+            st.caption("Approval time is stamped automatically and saved to approval.json.")
+
+            approve_ready = can_approve(state, controller, reviewer, latest_version)
+            reject_ready = can_reject(state, controller, reviewer)
+            button_cols = st.columns(3)
+            with button_cols[0]:
+                reject_clicked = st.button(
+                    "Reject",
+                    key="reject_btn",
+                    icon=None if reject_ready else ":material/lock:",
+                    disabled=not reject_ready,
+                )
+            with button_cols[1]:
+                approve_clicked = st.button(
+                    "Approve",
+                    type="primary",
+                    key="approve_btn",
+                    icon=None if approve_ready else ":material/lock:",
+                    disabled=not approve_ready,
+                )
+            with button_cols[2]:
+                st.button("Execute", type="primary", key="execute_btn", icon=":material/lock:", disabled=True)
+            st.caption("Test execution arrives in Milestone 6.")
+
+            if reject_clicked and controller is not None and latest_version is not None:
+                with state.lock:
+                    controller.record_approval("REJECT", reviewer, latest_version, comment or None)
+                st.rerun()
+            if approve_clicked and controller is not None and latest_version is not None:
+                with state.lock:
+                    controller.record_approval("APPROVE", reviewer, latest_version, comment or None)
+                st.rerun()
+
+    with st.container(border=True):
+        st.markdown("**Test run**")
+        st.info("Results appear here after execution (Milestone 6).")
 
 
-_SECTION_RENDERERS = {
-    SECTIONS[0]: _render_section_overview,
-    SECTIONS[1]: _render_section_scenarios,
-    SECTIONS[2]: _render_section_approval,
-    SECTIONS[3]: _render_section_results,
+# ---------------------------------------------------------------------------
+# Page "results" (Results) -- whole page is a Milestone 6 placeholder.
+# ---------------------------------------------------------------------------
+
+
+def _render_page_results(state: UIState, data: dict) -> None:
+    _render_page_header("Results")
+    st.info("Results appear after the tests run (Milestone 6).")
+
+
+_NAV_RENDERERS = {
+    "requirements": _render_page_requirements,
+    "scenarios": _render_page_scenarios,
+    "execution": _render_page_execution,
+    "results": _render_page_results,
 }
 
 
 def main() -> None:
     st.set_page_config(page_title="AI Test Engineer Agent", layout="wide")
-    _inject_css()
     state = get_ui_state()
 
-    # One fragment for the whole page (sidebar + the selected section): a
-    # worker finishing must refresh everything on the next tick, not just
-    # part of it, or the Confirm decision control / Start button's disabled
-    # state would stay stale until a manual Refresh Status click.
+    # One fragment for the whole page (top-bar chips + sidebar + the
+    # selected page): a worker finishing must refresh everything on the
+    # next tick, not just part of it, or the Confirm decision control /
+    # Start button's disabled state would stay stale until a manual
+    # Refresh status click.
     @st.fragment(run_every=2)
     def _app_fragment() -> None:
+        current_nav_id = st.session_state.get("nav_id", NAV_ITEMS[0][0])
+        _inject_css(current_nav_id)
         data = gather_display_data(state)
-        section = _render_sidebar(state, data)
-        _SECTION_RENDERERS[section](state, data)
+        _render_top_bar_chips(data)
+        current_nav_id = _render_sidebar(state, data, current_nav_id)
+        _NAV_RENDERERS[current_nav_id](state, data)
 
     _app_fragment()
 

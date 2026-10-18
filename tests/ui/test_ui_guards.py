@@ -670,3 +670,51 @@ def test_can_approve_and_can_reject_false_when_worker_busy(tmp_path):
     state.worker_busy = True
     assert ui.can_approve(state, controller, "Chethan", 1) is False
     assert ui.can_reject(state, controller, "Chethan") is False
+
+
+# ---------------------------------------------------------------------------
+# format_assertion / decider_decision_value
+# ---------------------------------------------------------------------------
+
+
+def test_format_assertion_eq_operator():
+    assert ui.format_assertion({"observation": "ledger_success_count", "operator": "EQ", "expected": 1}) == (
+        "ledger_success_count == 1"
+    )
+
+
+def test_format_assertion_precedes_operator():
+    assertion = {"observation": "status_verification_before_retry_charge", "operator": "PRECEDES", "expected": True}
+    assert ui.format_assertion(assertion) == "status_verification_before_retry_charge precedes True"
+
+
+def test_decider_decision_value_human_escalation_uses_selected_action_directly():
+    record = {"decision_source": "HUMAN_ESCALATION", "selected_action": "REMEDIATE_GAP", "per_question": []}
+    assert ui.decider_decision_value(record) == "REMEDIATE_GAP"
+
+
+def test_decider_decision_value_decider_reads_coverage_action_answer_not_selected_action():
+    """selected_action for a DECIDER record is "Proceed"/a Deny-reason
+    string, never the bounded choice -- the real choice lives in
+    per_question's coverage_action entry."""
+    record = {
+        "decision_source": "DECIDER",
+        "selected_action": "Proceed",
+        "per_question": [
+            {"question": "grounding_S01", "answer": True},
+            {"question": "coverage_action", "answer": "ACCEPT_COVERAGE"},
+        ],
+    }
+    assert ui.decider_decision_value(record) == "ACCEPT_COVERAGE"
+
+
+def test_decider_decision_value_falls_back_to_selected_action_when_coverage_action_answer_missing():
+    """The escalation-moment record (action is Confirm, selected_action
+    falls through to "Confirm") has coverage_action's answer as None since
+    no one has picked yet -- falls back rather than returning None."""
+    record = {
+        "decision_source": "DECIDER",
+        "selected_action": "Confirm",
+        "per_question": [{"question": "coverage_action", "answer": None}],
+    }
+    assert ui.decider_decision_value(record) == "Confirm"
