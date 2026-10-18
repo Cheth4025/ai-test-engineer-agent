@@ -893,3 +893,232 @@ def test_execution_shows_fixed_manifest_with_real_expected_assertions(monkeypatc
     t03_row = manifest_table[manifest_table["ID"] == "T03"]
     assert "conflict_rejected" in t03_row["Expected"].iloc[0]
     assert any("ledger_success_count == 1" in c.value for c in at.caption)
+
+
+# ---------------------------------------------------------------------------
+# Milestone 6: Execute unlock, the Test run card, and the Results page.
+# Fixtures only -- real T04-evidence shape, no live execute_approved_run.
+# ---------------------------------------------------------------------------
+
+
+def _write_completed_execution_fixture(run_dir: Path) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "coverage_final.json").write_text(
+        json.dumps({"covered": 5, "required": 5, "percentage": 100.0, "rows": [], "rule_traceability": {}})
+    )
+    (run_dir / "approval.json").write_text(
+        json.dumps({"decision": "APPROVE", "reviewer": "Chethan", "comment": None, "timestamp": "2026-10-18T19:00:00Z"})
+    )
+    results = {
+        "execution_id": "run-1",
+        "return_code": 1,
+        "duration_ms": 412,
+        "tests": [
+            {"test_id": "T01", "scenario_id": "S01", "rule_ids": ["BR01"], "status": "PASS", "duration_ms": 3, "expected": "1 charge", "actual": "1 charge", "failure_message": None, "evidence_reference": "execution/T01_evidence.json"},
+            {"test_id": "T02", "scenario_id": "S02", "rule_ids": ["BR01"], "status": "PASS", "duration_ms": 4, "expected": "1 charge", "actual": "1 charge", "failure_message": None, "evidence_reference": "execution/T02_evidence.json"},
+            {"test_id": "T03", "scenario_id": "S03", "rule_ids": ["BR01", "BR03"], "status": "PASS", "duration_ms": 2, "expected": "Conflict", "actual": "Conflict", "failure_message": None, "evidence_reference": "execution/T03_evidence.json"},
+            {"test_id": "T04", "scenario_id": "S04", "rule_ids": ["BR06"], "status": "FAIL", "duration_ms": 5, "expected": "1 ledger entry", "actual": "2 ledger entries", "failure_message": "assert 2 == 1", "evidence_reference": "execution/T04_evidence.json"},
+            {"test_id": "T05", "scenario_id": "S05", "rule_ids": ["BR01"], "status": "PASS", "duration_ms": 6, "expected": "1 charge", "actual": "1 charge", "failure_message": None, "evidence_reference": "execution/T05_evidence.json"},
+        ],
+        "junit_reference": "execution/junit.xml",
+        "log_reference": "execution/pytest_output.log",
+    }
+    (run_dir / "results.json").write_text(json.dumps(results))
+
+    execution_dir = run_dir / "execution"
+    execution_dir.mkdir(parents=True, exist_ok=True)
+    (execution_dir / "pytest_output.log").write_text("tests/payment/test_payment.py::test_t04_duplicate_callback FAILED")
+    (execution_dir / "T04_evidence.json").write_text(
+        json.dumps(
+            {
+                "test_id": "T04",
+                "ledger": [
+                    {"entry_id": "ledger-1", "payment_id": "P-001", "amount": "100.00", "currency": "USD", "callback_id": "C-001"},
+                    {"entry_id": "ledger-2", "payment_id": "P-001", "amount": "100.00", "currency": "USD", "callback_id": "C-001"},
+                ],
+                "events": [
+                    {"sequence": 1, "action": "callback_delivered", "payment_id": "P-001", "callback_id": "C-001", "details": {"delivery_number": 1}},
+                    {"sequence": 2, "action": "callback_delivered", "payment_id": "P-001", "callback_id": "C-001", "details": {"delivery_number": 2}},
+                ],
+            }
+        )
+    )
+
+    analysis = {
+        "has_failure": True,
+        "test_id": "T04",
+        "rule_ids": ["BR06"],
+        "classification": "BUSINESS_RULE_VIOLATION",
+        "expected_behavior": "BR06: Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting.",
+        "actual_behavior": "Observed 2 ledger entries instead of 1 ledger entry.",
+        "impact": ["Books overstate the payment.", "Reconciliation against the gateway disagrees."],
+        "evidence_references": ["execution/T04_evidence.json"],
+        "handling_action": "REPORT_FAILURE",
+        "investigated": False,
+    }
+    (run_dir / "analysis.json").write_text(json.dumps(analysis))
+
+    decisions = [
+        {
+            "checkpoint": "COVERAGE",
+            "decision_source": "DECIDER",
+            "decision_status": "VALIDATED",
+            "confidence": 0.97,
+            "threshold": 0.75,
+            "route": "AUTO",
+            "per_question": [{"question": "coverage_action", "answer": "ACCEPT_COVERAGE", "confidence": 0.97}],
+        },
+        {
+            "checkpoint": "FAILURE",
+            "decision_source": "DECIDER",
+            "decision_status": "VALIDATED",
+            "confidence": 0.95,
+            "threshold": 0.75,
+            "route": "AUTO",
+            "per_question": [
+                {"question": "failure_class", "answer": "BUSINESS_RULE_VIOLATION", "confidence": 0.95},
+                {"question": "failure_action", "answer": "REPORT_FAILURE", "confidence": 0.9},
+            ],
+        },
+        {
+            "checkpoint": "COMPLETION",
+            "decision_source": "DECIDER",
+            "decision_status": "VALIDATED",
+            "confidence": 0.95,
+            "threshold": 0.75,
+            "route": "AUTO",
+            "per_question": [{"question": "completion_action", "answer": "FINALIZE_RESULTS", "confidence": 0.95}],
+        },
+    ]
+    (run_dir / "decisions.json").write_text(json.dumps(decisions))
+
+    report_text = (
+        "# AI Test Engineer Agent -- Report\n\n"
+        "**Agent workflow:** COMPLETED  \n**Payment verification:** FAILED\n"
+    )
+    (run_dir / "report.md").write_text(report_text, encoding="utf-8")
+    (run_dir / "report_metadata.json").write_text(
+        json.dumps({"agent_workflow_status": "COMPLETED", "payment_verification_status": "FAILED"})
+    )
+
+
+def _register_completed_run(tmp_path) -> RunController:
+    run_dir = tmp_path / "run-1"
+    _write_completed_execution_fixture(run_dir)
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("COMPLETED", stage="COMPLETED", busy=False)
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def _register_approved_run(tmp_path) -> RunController:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "coverage_final.json").write_text(
+        json.dumps({"covered": 5, "required": 5, "percentage": 100.0, "rows": [], "rule_traceability": {}})
+    )
+    (run_dir / "approval.json").write_text(
+        json.dumps({"decision": "APPROVE", "reviewer": "Chethan", "comment": None, "timestamp": "2026-10-18T19:00:00Z"})
+    )
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("APPROVED", stage="APPROVED", busy=False)
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def test_execute_button_unlocks_when_approved(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_approved_run(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "button", "Execute"))
+
+    assert next(b for b in at.button if b.label == "Execute").disabled is False
+    assert any("Ready to execute" in w.value for w in at.sidebar.warning)
+
+
+def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "results")
+    at = _settle(at, lambda a: any("Agent workflow" in w.value for w in list(a.success) + list(a.error)))
+
+    assert not at.exception
+    banner_texts = " ".join(w.value for w in list(at.success) + list(at.error))
+    assert "Agent workflow: COMPLETED" in banner_texts
+    assert "Payment verification: FAILED" in banner_texts
+
+    results_table = next(t.value for t in at.table if "Actual" in getattr(t.value, "columns", []))
+    assert list(results_table["ID"]) == ["T01", "T02", "T03", "T04", "T05"]
+    t04_row = results_table[results_table["ID"] == "T04"]
+    assert t04_row["Expected"].iloc[0] == "1 ledger entry"
+    assert t04_row["Actual"].iloc[0] == "2 ledger entries"
+    assert t04_row["Status"].iloc[0] == "FAIL"
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Observed 2 ledger entries instead of 1 ledger entry." in markdown_text
+    assert "BR06: Re-delivery" in markdown_text
+    assert "Developer fix. The agent reports defects; it does not change code." in markdown_text
+    assert "root cause" not in markdown_text.lower()
+
+
+def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "results")
+    at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "COVERAGE" in markdown_text and "ACCEPT_COVERAGE" in markdown_text
+    assert "FAILURE" in markdown_text and "REPORT_FAILURE" in markdown_text
+    assert "COMPLETION" in markdown_text and "FINALIZE_RESULTS" in markdown_text
+
+
+def test_results_page_evidence_tabs_and_downloads(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "results")
+    at = _settle(at, lambda a: len(a.tabs) >= 3)
+
+    tab_labels = [tab.label for tab in at.tabs]
+    assert tab_labels == ["Callbacks", "Ledger entries", "Test log"]
+
+    download_labels = {b.label for b in at.download_button}
+    assert download_labels == {"Download report (.md)", "Download evidence (.zip)"}
+    assert not any("Download" in (b.label or "") for b in at.button)  # not the locked st.button fallback
+
+
+def test_results_page_placeholder_when_no_results_yet(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "results")
+
+    assert any("Results appear after the tests run." in i.value for i in at.info)

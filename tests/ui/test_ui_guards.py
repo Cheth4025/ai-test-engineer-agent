@@ -673,6 +673,46 @@ def test_can_approve_and_can_reject_false_when_worker_busy(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# can_execute -- enforced for real in RunController.use_execution/
+# orchestration.execute_approved_run; mirrors can_approve/can_reject's
+# existing pattern.
+# ---------------------------------------------------------------------------
+
+
+def _approved_controller(tmp_path) -> RunController:
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("APPROVED", stage="APPROVED", busy=False)
+    return controller
+
+
+def test_can_execute_true_when_approved_and_not_started(tmp_path):
+    controller = _approved_controller(tmp_path)
+    assert ui.can_execute(ui.UIState(), controller) is True
+
+
+def test_can_execute_false_when_controller_none():
+    assert ui.can_execute(ui.UIState(), None) is False
+
+
+def test_can_execute_false_when_worker_busy(tmp_path):
+    controller = _approved_controller(tmp_path)
+    state = ui.UIState()
+    state.worker_busy = True
+    assert ui.can_execute(state, controller) is False
+
+
+def test_can_execute_false_when_not_approved(tmp_path):
+    controller = RunController("r1", tmp_path)  # PREPARING
+    assert ui.can_execute(ui.UIState(), controller) is False
+
+
+def test_can_execute_false_when_already_started(tmp_path):
+    controller = _approved_controller(tmp_path)
+    assert controller.use_execution() is True
+    assert ui.can_execute(ui.UIState(), controller) is False
+
+
+# ---------------------------------------------------------------------------
 # format_assertion / decider_decision_value
 # ---------------------------------------------------------------------------
 
@@ -903,3 +943,93 @@ def test_base_css_carries_the_new_title_and_not_the_old_one():
 
 def test_page_config_kwargs_use_the_new_title():
     assert ui._page_config_kwargs()["page_title"] == ui.APP_TITLE
+
+
+# ---------------------------------------------------------------------------
+# Milestone 6: sidebar_pending_action's new execute_ready kind,
+# decider_decision_value/primary_choice_confidence generalized beyond
+# COVERAGE, and build_evidence_zip.
+# ---------------------------------------------------------------------------
+
+
+def test_sidebar_pending_action_execute_ready(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("APPROVED", stage="APPROVED", busy=False)
+    assert ui.sidebar_pending_action(controller) == {"kind": "execute_ready", "section_id": "execution"}
+
+
+def test_sidebar_pending_action_none_once_execution_started(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("APPROVED", stage="APPROVED", busy=False)
+    controller.use_execution()
+    assert ui.sidebar_pending_action(controller) is None
+
+
+def test_decider_decision_value_failure_checkpoint_reads_failure_action():
+    record = {
+        "decision_source": "DECIDER",
+        "selected_action": "Proceed",
+        "per_question": [
+            {"question": "failure_class", "answer": "BUSINESS_RULE_VIOLATION"},
+            {"question": "failure_action", "answer": "REPORT_FAILURE"},
+        ],
+    }
+    assert ui.decider_decision_value(record) == "REPORT_FAILURE"
+
+
+def test_decider_decision_value_completion_checkpoint_reads_completion_action():
+    record = {
+        "decision_source": "DECIDER",
+        "selected_action": "Proceed",
+        "per_question": [{"question": "completion_action", "answer": "FINALIZE_RESULTS"}],
+    }
+    assert ui.decider_decision_value(record) == "FINALIZE_RESULTS"
+
+
+def test_primary_choice_confidence_reads_failure_action_not_failure_class():
+    """failure_class isn't itself a primary choice question (only
+    failure_action is) -- its confidence is skipped even though it's the
+    first entry in per_question."""
+    record = {
+        "per_question": [
+            {"question": "failure_class", "confidence": 0.95},
+            {"question": "failure_action", "confidence": 0.62},
+        ]
+    }
+    assert ui.primary_choice_confidence(record) == 0.62
+
+
+def test_primary_choice_confidence_none_when_no_primary_choice_question():
+    assert ui.primary_choice_confidence({"per_question": [{"question": "grounding_S01", "confidence": 0.9}]}) is None
+
+
+def test_build_evidence_zip_bundles_existing_json_and_log_files(tmp_path):
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "results.json").write_text('{"a": 1}')
+    (run_dir / "ignored.txt").write_text("not bundled")
+    execution_dir = run_dir / "execution"
+    execution_dir.mkdir()
+    (execution_dir / "pytest_output.log").write_text("PASSED")
+
+    zip_bytes = ui.build_evidence_zip(run_dir)
+
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        names = {name.replace("\\", "/") for name in archive.namelist()}
+    assert "results.json" in names
+    assert "execution/pytest_output.log" in names
+    assert not any(name.endswith("ignored.txt") for name in names)
+
+
+def test_build_evidence_zip_none_when_run_dir_missing(tmp_path):
+    assert ui.build_evidence_zip(tmp_path / "does-not-exist") is None
+
+
+def test_build_evidence_zip_none_when_nothing_to_bundle(tmp_path):
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    (run_dir / "ignored.txt").write_text("not bundled")
+    assert ui.build_evidence_zip(run_dir) is None

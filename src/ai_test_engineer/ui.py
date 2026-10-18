@@ -1633,8 +1633,10 @@ def _render_page_results(state: UIState, data: dict) -> None:
     if has_failure:
         with st.container(border=True):
             _card_heading(f"Evidence — {analysis['test_id']}")
-            evidence_path = controller.run_dir / (analysis.get("evidence_reference") or "")
-            evidence = _load_json(evidence_path) or {}
+            failed_test = next((t for t in tests if t["test_id"] == analysis["test_id"]), None)
+            evidence_reference = failed_test.get("evidence_reference") if failed_test else None
+            evidence = _load_json(controller.run_dir / evidence_reference) if evidence_reference else None
+            evidence = evidence or {}
             tabs = st.tabs(["Callbacks", "Ledger entries", "Test log"])
             with tabs[0]:
                 callbacks = [e for e in evidence.get("events", []) if e.get("action") == "callback_delivered"]
