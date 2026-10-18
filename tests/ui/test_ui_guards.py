@@ -690,7 +690,7 @@ def test_format_assertion_precedes_operator():
 
 def test_decider_decision_value_human_escalation_uses_selected_action_directly():
     record = {"decision_source": "HUMAN_ESCALATION", "selected_action": "REMEDIATE_GAP", "per_question": []}
-    assert ui.decider_decision_value(record) == "REMEDIATE_GAP"
+    assert ui.decider_decision_value(record) == "REMEDIATE_GAP (human)"
 
 
 def test_decider_decision_value_decider_reads_coverage_action_answer_not_selected_action():
@@ -708,13 +708,61 @@ def test_decider_decision_value_decider_reads_coverage_action_answer_not_selecte
     assert ui.decider_decision_value(record) == "ACCEPT_COVERAGE"
 
 
-def test_decider_decision_value_falls_back_to_selected_action_when_coverage_action_answer_missing():
-    """The escalation-moment record (action is Confirm, selected_action
-    falls through to "Confirm") has coverage_action's answer as None since
-    no one has picked yet -- falls back rather than returning None."""
+def test_decider_decision_value_awaiting_human_when_coverage_action_answer_missing():
+    """The escalation-moment record (action is Confirm, selected_action is
+    just the gate's internal action name) has coverage_action's answer as
+    None since no one has picked yet -- shows "Awaiting human", never the
+    internal "Confirm" action name as if it were a real decision (live-run
+    bug: the UI showed "Decision: Confirm" for a still-pending escalation)."""
     record = {
         "decision_source": "DECIDER",
         "selected_action": "Confirm",
         "per_question": [{"question": "coverage_action", "answer": None}],
     }
-    assert ui.decider_decision_value(record) == "Confirm"
+    assert ui.decider_decision_value(record) == "Awaiting human"
+
+
+def test_decider_decision_value_rejected_by_guard_overrides_everything_else():
+    """A human pick a deterministic guard rejected (live-run evidence:
+    "ACCEPT_COVERAGE" picked while coverage was 4/5, rejected with
+    rejection_reason "5/5 required") must never render as if it were a
+    normal, accepted decision."""
+    record = {
+        "decision_source": "HUMAN_ESCALATION",
+        "selected_action": "ACCEPT_COVERAGE",
+        "decision_status": "REJECTED",
+        "rejection_reason": "5/5 required",
+        "per_question": [{"question": "coverage_action", "answer": None}],
+    }
+    assert ui.decider_decision_value(record) == "Rejected by guard: 5/5 required"
+
+
+def test_coverage_action_confidence_reads_the_question_not_the_batch_level_field():
+    """The coverage_action question's own confidence, distinct from the
+    record's top-level "confidence" (the batch's lowest-scoring verdict,
+    compared against a different threshold -- see coverage_action_
+    confidence's docstring)."""
+    record = {
+        "confidence": 0.5812,  # batch-level -- must be ignored here
+        "per_question": [
+            {"question": "grounding_S01", "confidence": 0.5812},
+            {"question": "coverage_action", "confidence": 0.8711},
+        ],
+    }
+    assert ui.coverage_action_confidence(record) == 0.8711
+
+
+def test_coverage_action_confidence_none_when_question_absent():
+    assert ui.coverage_action_confidence({"per_question": []}) is None
+
+
+def test_round4_rounds_floats_and_passes_through_none():
+    assert ui.round4(0.41879999999999995) == 0.4188
+    assert ui.round4(None) is None
+
+
+def test_round4_probabilities_rounds_each_value():
+    assert ui.round4_probabilities({"true": 0.41879999999999995, "false": 0.5812}) == {
+        "true": 0.4188,
+        "false": 0.5812,
+    }

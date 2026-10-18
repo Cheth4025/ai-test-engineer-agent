@@ -615,6 +615,18 @@ def build_all(
                 {
                     "tool_name": tool_name,
                     "context": pending_ctx,
+                    # A stable id for THIS escalation instance, not the run --
+                    # controller.decisions already has this escalation's own
+                    # DECIDER record appended (the record_decision call just
+                    # above), so its length is a monotonically increasing
+                    # counter that is the same across every UI refresh while
+                    # this exact decision is still pending, and different for
+                    # the next escalation. The UI keys its choice radio on
+                    # this (not just controller.run_id, which stays constant
+                    # across multiple escalations in one run) so a second
+                    # escalation gets a fresh, unanswered widget instead of
+                    # inheriting state left over from the first one.
+                    "escalation_seq": len(controller.decisions),
                     "verdicts": {
                         name: {
                             "answer": v.answer,

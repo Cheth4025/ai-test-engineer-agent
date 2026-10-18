@@ -231,7 +231,9 @@ def test_approval_and_results_placeholders_before_any_run(monkeypatch, tmp_path,
 # ---------------------------------------------------------------------------
 
 
-def _register_paused_run(tmp_path, run_id: str, tool_name: str, verdicts: dict | None = None) -> dict:
+def _register_paused_run(
+    tmp_path, run_id: str, tool_name: str, verdicts: dict | None = None, escalation_seq: int = 1
+) -> dict:
     if verdicts is None:
         verdicts = (
             {
@@ -254,7 +256,7 @@ def _register_paused_run(tmp_path, run_id: str, tool_name: str, verdicts: dict |
                 }
             }
         )
-    pending = {"tool_name": tool_name, "context": {}, "verdicts": verdicts}
+    pending = {"tool_name": tool_name, "context": {}, "verdicts": verdicts, "escalation_seq": escalation_seq}
     controller = RunController(run_id, tmp_path / run_id)
     controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
     controller.set_pending_decision(pending)
@@ -302,14 +304,18 @@ def test_sidebar_shows_notice_pointing_to_page_with_pending_decision(monkeypatch
     assert any("Scenarios" in w.value for w in at.sidebar.warning)
 
 
-def test_confirm_decision_preselects_suggestion_with_realistic_multi_question_verdicts(
+def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
     monkeypatch, tmp_path, ui_script_path
 ):
-    """Reproduces the real checkpoint shape, where per-scenario grounding
+    """The live BLOCKED-run bug (20261018T191604Z_0ad068bc) traced back to
+    this radio preselecting the Decider's suggestion by default -- a human
+    pick REMEDIATE_GAP got silently reverted to that default and the
+    reverted value (ACCEPT_COVERAGE) was submitted instead, which the 5/5
+    guard then rejected. Fix: no preselection at all (index=None), and
+    Confirm stays disabled until the human has actually picked something.
+    Also reproduces the real checkpoint shape, where per-scenario grounding
     yes/no questions are inserted into pending["verdicts"] BEFORE the
-    actual coverage_action choice question -- picking "the first verdict"
-    would preselect based on a grounding answer, not the Decider's real
-    suggestion for the choice itself."""
+    actual coverage_action choice question."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     verdicts = {
         "grounding_S03": {
@@ -336,11 +342,24 @@ def test_confirm_decision_preselects_suggestion_with_realistic_multi_question_ve
     at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
-    radios = [r for r in at.radio if r.label == "Your choice"]
-    assert radios[0].value == "ACCEPT_COVERAGE"
+    radio = next(r for r in at.radio if r.label == "Your choice")
+    assert radio.value is None  # never preselects the Decider's suggestion
+    assert next(b for b in at.button if b.label == "Confirm decision").disabled is True
+
+    radio.set_value("ACCEPT_COVERAGE").run()
+    assert next(b for b in at.button if b.label == "Confirm decision").disabled is False
 
 
-def test_confirm_decision_applies_choice_through_resume_pending_decision(monkeypatch, tmp_path, ui_script_path):
+def test_confirm_decision_choice_survives_fragment_reruns_and_submits_exactly_that_choice(
+    monkeypatch, tmp_path, ui_script_path
+):
+    """Regression test for the live BLOCKED-run bug: picks the option that
+    does NOT match the Decider's own suggestion (REMEDIATE_GAP's suggestion
+    here is implicitly ACCEPT_COVERAGE-adjacent via default verdicts, see
+    _register_paused_run) so a silent revert-to-default would be caught,
+    re-renders several times with no further interaction -- the same thing
+    a st.fragment(run_every=2) auto-refresh does -- and confirms the choice
+    never reverts and the exact chosen value is what gets submitted."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
     monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
@@ -360,13 +379,70 @@ def test_confirm_decision_applies_choice_through_resume_pending_decision(monkeyp
     at.run()
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: _has_label(a, "button", "Confirm decision"))
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    # The default verdicts' suggestion is REMEDIATE_GAP -- deliberately pick
+    # the OTHER option so a silent revert to the suggestion would be caught.
+    next(r for r in at.radio if r.label == "Your choice").set_value("ACCEPT_COVERAGE").run()
+
+    # Several re-renders with no further interaction -- what a fragment's
+    # periodic auto-refresh does.
+    for _ in range(5):
+        at.run()
+        assert next(r for r in at.radio if r.label == "Your choice").value == "ACCEPT_COVERAGE"
 
     next(b for b in at.button if b.label == "Confirm decision").click().run()
     at = _settle(at, lambda a: not _has_label(a, "button", "Confirm decision"))
 
     assert not at.exception
-    assert applied == [("run-1", "REMEDIATE_GAP")]
+    assert applied == [("run-1", "ACCEPT_COVERAGE")]
+
+
+def test_second_escalation_in_same_run_gets_a_fresh_unanswered_radio(monkeypatch, tmp_path, ui_script_path):
+    """Reproduces the second half of the live BLOCKED-run bug: after a
+    REMEDIATE_GAP, the RESCORING-stage COVERAGE escalation that follows is
+    a SEPARATE escalation in the same run and must not inherit whatever the
+    first escalation's radio was left holding -- it needs its own fresh,
+    unanswered widget (checkpoints.py's escalation_seq, which changes
+    between the two)."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set", escalation_seq=1)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "scenarios")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("REMEDIATE_GAP").run()
+    assert next(r for r in at.radio if r.label == "Your choice").value == "REMEDIATE_GAP"
+
+    # A later, second escalation in the SAME run -- a new pending_decision
+    # with a different escalation_seq, same shape checkpoints.py produces
+    # after a remediation pass re-escalates at RESCORING.
+    controller.set_pending_decision(
+        {
+            "tool_name": "save_scenario_set",
+            "context": {},
+            "verdicts": {
+                "coverage_action": {
+                    "answer": None,
+                    "suggestion": "ACCEPT_COVERAGE",
+                    "confidence": 0.87,
+                    "probabilities": {"ACCEPT_COVERAGE": 0.87, "REMEDIATE_GAP": 0.13},
+                    "route": "ESCALATE",
+                }
+            },
+            "escalation_seq": 2,
+        }
+    )
+    at.run()
+
+    new_radio = next(r for r in at.radio if r.label == "Your choice")
+    assert new_radio.value is None
+    assert next(b for b in at.button if b.label == "Confirm decision").disabled is True
 
 
 def test_duplicate_start_analysis_click_while_busy_does_not_start_second_run(monkeypatch, tmp_path, ui_script_path):
@@ -505,7 +581,9 @@ def _write_remediation_fixture(run_dir: Path, confidence: float = 0.62) -> None:
             "threshold": 0.75,
             "latency_ms": 120,
             "host_label": "local-cpu",
-            "per_question": [{"question": "coverage_action", "answer": None, "suggestion": "REMEDIATE_GAP"}],
+            "per_question": [
+                {"question": "coverage_action", "answer": None, "suggestion": "REMEDIATE_GAP", "confidence": confidence}
+            ],
         },
         {
             "checkpoint": "COVERAGE",
@@ -531,7 +609,9 @@ def _write_remediation_fixture(run_dir: Path, confidence: float = 0.62) -> None:
             "threshold": 0.75,
             "latency_ms": 95,
             "host_label": "local-cpu",
-            "per_question": [{"question": "coverage_action", "answer": "ACCEPT_COVERAGE", "suggestion": "ACCEPT_COVERAGE"}],
+            "per_question": [
+                {"question": "coverage_action", "answer": "ACCEPT_COVERAGE", "suggestion": "ACCEPT_COVERAGE", "confidence": 0.97}
+            ],
         },
     ]
     (run_dir / "decisions.json").write_text(json.dumps(decisions))

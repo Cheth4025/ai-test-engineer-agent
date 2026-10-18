@@ -93,16 +93,6 @@ TERMINAL_WORKFLOW_STATES = {"COMPLETED", "REJECTED", "BLOCKED", "STOPPED"}
 # there, so New Analysis must not be allowed to abandon it.
 RESTARTABLE_WORKFLOW_STATES = TERMINAL_WORKFLOW_STATES | {"AWAITING_APPROVAL", "AWAITING_CLARIFICATION"}
 
-# The one question per checkpoint whose suggestion should preselect the
-# Confirm decision radio -- the other verdicts in pending["verdicts"] are
-# per-scenario grounding/ambiguity yes-no questions, not the actual
-# action choice (dict iteration order puts those first, see checkpoints.py's
-# build_generate_scenarios_checkpoint/build_coverage_checkpoint).
-CHOICE_QUESTION_FOR_TOOL = {
-    "save_scenario_set": "coverage_action",
-    "generate_scenarios": "strategy_action",
-}
-
 
 def options_for(tool_name: str) -> list[str]:
     try:
@@ -450,21 +440,63 @@ def format_assertion(assertion: dict) -> str:
     return f"{assertion['observation']} {operator} {assertion['expected']}"
 
 
+def coverage_action_confidence(record: dict) -> float | None:
+    """The coverage_action question's OWN confidence (per_question), not
+    the top-level record["confidence"] -- that top-level number is the
+    lowest-scoring verdict across the whole escalated batch (grounding
+    flags included), compared against noul_upper (0.8, the gate's own
+    route-level escalate/auto threshold) -- a different number for a
+    different purpose than the per-choice accept/escalate gate
+    (choice_threshold, 0.75) coverage_action is actually compared against.
+    Live-run evidence (decisions.json) confirms the two can disagree: one
+    COVERAGE record had a 0.65 batch-low confidence vs the 0.8 route gate,
+    while its own coverage_action question scored 0.87 vs the 0.75 choice
+    gate and resolved AUTO."""
+    for question in record.get("per_question") or []:
+        if question.get("question") == "coverage_action":
+            return question.get("confidence")
+    return None
+
+
+def round4(value: float | None) -> float | None:
+    """Confidence/probability values round-trip through JSON as raw floats
+    (e.g. 0.41879999999999995) -- rounds for display only, never for
+    comparison/storage. Non-numeric/None values pass through unchanged."""
+    return round(value, 4) if isinstance(value, (int, float)) else value
+
+
+def round4_probabilities(probabilities: dict | None) -> dict:
+    return {key: round4(value) for key, value in (probabilities or {}).items()}
+
+
 def decider_decision_value(record: dict) -> str:
-    """The real bounded-action choice (e.g. ACCEPT_COVERAGE/REMEDIATE_GAP),
-    not selected_action's "Proceed"/Deny-reason text. Traced through
-    checkpoints.py: for decision_source DECIDER/REUSED, selected_action is
-    "Proceed" on acceptance or a free-text Deny reason otherwise -- never
-    the bounded choice itself. The real choice for those sources lives in
-    per_question's "coverage_action" entry's "answer" field. For
-    HUMAN_ESCALATION, selected_action already IS the human's literal
-    choice string, so it's used directly."""
+    """The real bounded-action choice (e.g. ACCEPT_COVERAGE/REMEDIATE_GAP)
+    for one decisions.json COVERAGE record, as the Decision line should
+    read it -- never the gate's own internal "Confirm" action name, and
+    never a normal-looking choice for a pick a guard actually rejected
+    (live-run evidence: a human's "ACCEPT_COVERAGE" pick while coverage was
+    4/5 was REJECTED by the 5/5 guard, but the old version of this function
+    would have shown it as a plain, accepted "ACCEPT_COVERAGE" decision).
+
+    - decision_status == "REJECTED": "Rejected by guard: <reason>".
+    - decision_source == "HUMAN_ESCALATION": the human's literal choice
+      (selected_action already IS that string) with " (human)" appended.
+    - DECIDER/REUSED whose coverage_action question is still unanswered
+      (per_question's "answer" is None -- the escalation-moment record,
+      where selected_action is just the gate's "Confirm" action name, not
+      a real choice): "Awaiting human", not "Confirm".
+    - DECIDER/REUSED with an answered coverage_action (resolved AUTO, no
+      escalation needed for that question even though the batch escalated
+      overall): that real answer.
+    """
+    if record.get("decision_status") == "REJECTED":
+        return f"Rejected by guard: {record.get('rejection_reason') or 'deterministic guard'}"
     if record.get("decision_source") == "HUMAN_ESCALATION":
-        return record.get("selected_action") or "—"
+        return f"{record.get('selected_action') or '—'} (human)"
     for question in record.get("per_question") or []:
         if question.get("question") == "coverage_action" and question.get("answer") is not None:
             return question["answer"]
-    return record.get("selected_action") or "—"
+    return "Awaiting human"
 
 
 def _host_label() -> str:
@@ -473,6 +505,16 @@ def _host_label() -> str:
         return checkpoints.resolve_host_label(decider_cfg)
     except KeyError:
         return "unknown"
+
+
+def _choice_threshold() -> float | None:
+    """config/decider.json's choice_threshold (0.75) -- the per-question
+    accept/escalate gate a bounded choice like coverage_action is actually
+    compared against. Distinct from a record's own top-level "threshold"
+    field (noul_upper, 0.8), which gates the overall route, not any single
+    answer -- see coverage_action_confidence's docstring."""
+    decider_cfg = _load_json(CONFIG_DIR / "decider.json") or {}
+    return decider_cfg.get("choice_threshold")
 
 
 def gather_display_data(state: UIState) -> dict:
@@ -762,14 +804,11 @@ def _render_confirm_decision(state: UIState, controller: RunController) -> None:
     for name, fields in pending["verdicts"].items():
         st.write(
             f"**{name}** -- suggestion: `{fields['suggestion']}`, "
-            f"confidence: {fields['confidence']}, route: {fields['route']}, "
-            f"probabilities: {fields['probabilities']}"
+            f"confidence: {round4(fields['confidence'])}, route: {fields['route']}, "
+            f"probabilities: {round4_probabilities(fields['probabilities'])}"
         )
 
     options = options_for(pending["tool_name"])
-    choice_question = CHOICE_QUESTION_FOR_TOOL.get(pending["tool_name"])
-    primary = pending["verdicts"].get(choice_question) if choice_question else None
-    default_index = options.index(primary["suggestion"]) if primary and primary["suggestion"] in options else 0
 
     result = state.last_result or {}
     if result.get("rejected_choice") and controller.decisions:
@@ -779,9 +818,41 @@ def _render_confirm_decision(state: UIState, controller: RunController) -> None:
             f"{last_decision.get('rejection_reason') or 'deterministic guard'} -- pick again."
         )
 
-    choice = st.radio("Your choice", options, index=default_index, key=f"confirm_{controller.run_id}")
+    # Root cause of the live BLOCKED run (20261018T191604Z_0ad068bc): this
+    # radio used to default-preselect the Decider's suggestion via
+    # index=default_index, recomputed and re-passed on every single
+    # st.fragment(run_every=2) tick (every 2s) -- and the widget's key was
+    # f"confirm_{run_id}", constant for the WHOLE run, not per escalation.
+    # Between the human choosing an option and clicking Confirm, an
+    # auto-refresh tick silently reverted the visible selection back to
+    # that default; the human clicked Confirm believing their real pick
+    # was still showing, and the reverted-to-default option was what
+    # actually got submitted (the run's own evidence: human selected
+    # REMEDIATE_GAP, ACCEPT_COVERAGE was submitted and rejected by the 5/5
+    # guard). Two independent fixes, both required:
+    #  1. index=None -- no default is ever re-asserted, so a stable key's
+    #     session_state value (the human's real, still-pending pick) is
+    #     never overridden by a periodic refresh.
+    #  2. A key scoped to THIS escalation instance (checkpoints.py's
+    #     escalation_seq), not just this run -- a second escalation in the
+    #     same run (e.g. RESCORING after a REMEDIATE_GAP) gets a fresh,
+    #     unanswered widget instead of silently inheriting whatever the
+    #     FIRST escalation's radio last held.
+    # Not wrapped in st.form: st.form widgets only commit on submit, so a
+    # submit button's disabled= can never react live to an unsubmitted
+    # in-form radio value -- it would stay permanently disabled before the
+    # first submit. Confirm needing to go from disabled to enabled the
+    # moment a choice is made is the more important guarantee here, and a
+    # periodic refresh was never able to "submit" by itself regardless (only
+    # an explicit Confirm click does, see below) -- index=None plus the
+    # escalation-scoped key already stop a refresh from silently changing
+    # what's selected, which was the actual defect.
+    widget_key = f"confirm_{controller.run_id}_{pending.get('escalation_seq', 0)}"
+    choice = st.radio("Your choice", options, index=None, key=widget_key)
     if st.button(
-        "Confirm decision", type="primary", disabled=not can_confirm_decision(state, controller)
+        "Confirm decision",
+        type="primary",
+        disabled=choice is None or not can_confirm_decision(state, controller),
     ):
         confirm_decision(state, choice)
         st.rerun()
@@ -974,16 +1045,28 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
             for scenario_id in entry["unresolved_grounding"]:
                 with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
                     st.write(f"Resolve grounding flag for {scenario_id}")
+                    # index=None (same fix as the Confirm decision radio
+                    # above, same pattern/bug class) -- no default is
+                    # silently carried as "the" resolution before a human
+                    # has actually picked one. st.form_submit_button's
+                    # disabled= can't react live to resolution's value (form
+                    # widgets only commit on submit), so the guard against an
+                    # empty pick is a post-submit check instead of a
+                    # pre-disabled button.
                     resolution = st.radio(
                         "Resolution",
                         ["CONFIRMED_GROUNDED", "CONFIRMED_NOT_GROUNDED"],
+                        index=None,
                         key=f"res_{selected_version}_{scenario_id}",
                     )
                     note = st.text_input("Note (optional)", key=f"note_{selected_version}_{scenario_id}")
                     if st.form_submit_button("Resolve", type="secondary", disabled=state.worker_busy):
-                        with state.lock:  # serialize against a worker thread writing the same run's files
-                            controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
-                        st.rerun()
+                        if resolution is None:
+                            st.error("Pick a resolution before submitting.")
+                        else:
+                            with state.lock:  # serialize against a worker thread writing the same run's files
+                                controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
+                            st.rerun()
 
     with col_right, st.container(border=True):
         _card_heading("Coverage")
@@ -1038,18 +1121,28 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
         if coverage_decisions:
             with decider_col, st.container(border=True):
                 _card_heading("Strands Decider (2B) decision", prefix="✅")
+                choice_threshold = round4(_choice_threshold())
                 for record in coverage_decisions:
-                    confidence = record.get("confidence")
-                    threshold = record.get("threshold")
                     source = record.get("decision_source")
-                    human_note = " (human answer)" if source == "HUMAN_ESCALATION" else ""
                     st.markdown(f"Checkpoint: `{record.get('checkpoint')}`")
                     st.markdown(f"Decision: `{decider_decision_value(record)}`")
-                    st.markdown(
-                        f"Confidence: {confidence if confidence is not None else '—'} "
-                        f"vs τ {threshold if threshold is not None else '—'}"
-                    )
-                    st.markdown(f"Route: {record.get('route')}{human_note}")
+                    # The coverage_action question's OWN confidence vs the
+                    # per-choice gate (τ 0.75), not the record's top-level
+                    # confidence/threshold (the batch's lowest-scoring
+                    # verdict vs the route-level gate, 0.8 -- a different
+                    # number for a different question, see
+                    # coverage_action_confidence's docstring). A
+                    # HUMAN_ESCALATION record's top-level confidence/
+                    # threshold are always None (the human wasn't scored),
+                    # so that line is dropped entirely rather than showing
+                    # a dash-dash placeholder.
+                    if source != "HUMAN_ESCALATION":
+                        confidence = round4(coverage_action_confidence(record))
+                        st.markdown(
+                            f"Confidence: {confidence if confidence is not None else '—'} "
+                            f"vs τ {choice_threshold if choice_threshold is not None else '—'}"
+                        )
+                    st.markdown(f"Route: {record.get('route')}")
                     st.markdown(f"Source: `{source}`")
                     st.divider()
 
