@@ -48,6 +48,18 @@ def test_t04_actual_reflects_the_real_duplicate_ledger_entry(controller):
     assert t04["failure_message"]
 
 
+def test_junit_xml_never_leaks_the_machine_hostname(controller):
+    """pytest's own junitxml writer embeds <testsuite hostname="..."> --
+    the real machine/account name (confirmed directly: on this dev machine
+    it writes the literal Windows computer name) -- and junit.xml is one of
+    the files bundled into evidence.zip. Strip it before it's ever written
+    where a downloaded zip could carry it."""
+    execution.run_approved_tests(controller)
+
+    junit_text = (controller.run_dir / "execution" / "junit.xml").read_text(encoding="utf-8")
+    assert "hostname=" not in junit_text
+
+
 def test_results_json_shape_and_evidence_references(controller):
     results = execution.run_approved_tests(controller)
 

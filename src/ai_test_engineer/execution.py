@@ -45,6 +45,18 @@ def _test_id_from_node_name(name: str) -> str:
     return match.group(1).upper() if match else name
 
 
+def _strip_junit_hostname(junit_path: Path) -> None:
+    """pytest's own junitxml writer stamps <testsuite hostname="..."> with
+    the real machine name (confirmed directly: the literal Windows computer
+    name) -- junit.xml is one of the files evidence.zip bundles, so this
+    runs immediately after pytest writes it, before anything else reads or
+    ships the file."""
+    tree = ET.parse(junit_path)
+    for testsuite in tree.getroot().iter("testsuite"):
+        testsuite.attrib.pop("hostname", None)
+    tree.write(junit_path, encoding="utf-8", xml_declaration=True)
+
+
 def _parse_junit(junit_path: Path) -> dict[str, dict]:
     """test_id ("T01".."T05") -> {"status", "duration_ms", "failure_message"}."""
     root = ET.parse(junit_path).getroot()
@@ -139,6 +151,7 @@ def run_approved_tests(controller: RunController) -> dict:
             f"pytest did not produce junit.xml (return_code={completed.returncode}); "
             "see execution/pytest_output.log"
         )
+    _strip_junit_hostname(junit_path)
     junit_results = _parse_junit(junit_path)
 
     expected_ids = {test["test_id"] for test in manifest}

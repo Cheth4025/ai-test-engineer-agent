@@ -222,6 +222,93 @@ def test_execute_approved_run_defect_on_happy_path_reaches_completed(monkeypatch
     assert "Payment verification:** FAILED" in (controller.run_dir / "report.md").read_text(encoding="utf-8")
 
 
+def _investigate_execution_decider_handler(request: httpx.Request) -> httpx.Response:
+    body = json.loads(request.content)
+    questions = body["questions"]
+    if "failure_class" in questions:
+        answers = {
+            "failure_class": {
+                "type": "choice", "choice": "BUSINESS_RULE_VIOLATION",
+                "probabilities": {"BUSINESS_RULE_VIOLATION": 0.95, "INFRASTRUCTURE_ERROR": 0.03, "INSUFFICIENT_EVIDENCE": 0.02},
+                "confidence": 0.95,
+            },
+            "failure_action": {
+                "type": "choice", "choice": "INVESTIGATE_FAILURE",
+                "probabilities": {"REPORT_FAILURE": 0.1, "INVESTIGATE_FAILURE": 0.9},
+                "confidence": 0.9,
+            },
+        }
+        return httpx.Response(200, json={"model": "m", "answers": answers, "usage": {}})
+    return _auto_execution_decider_handler(request)
+
+
+def test_investigate_failure_choice_never_reruns_tests_or_calls_bedrock_and_still_completes(monkeypatch, tmp_path):
+    """Answers the exact question asked before pushing: what INVESTIGATE_FAILURE
+    actually does. It must never call execution.run_approved_tests a second
+    time (no rerun), never touch ai_test_engineer.bedrock (no model call for
+    the analysis content -- the orchestrating ScriptedModel here stands in
+    for the *tool-calling* turns only, same as every other checkpoint; it is
+    never consulted for analysis prose), and the run must still reach
+    COMPLETED with payment_verification FAILED, same as REPORT_FAILURE."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.delenv("AITE_DUPLICATE_LEDGER_DEFECT", raising=False)
+
+    import ai_test_engineer.execution as execution_module
+
+    run_calls: list[int] = []
+    real_run_approved_tests = execution_module.run_approved_tests
+
+    def _counting_run_approved_tests(controller):
+        run_calls.append(1)
+        return real_run_approved_tests(controller)
+
+    monkeypatch.setattr(execution_module, "run_approved_tests", _counting_run_approved_tests)
+
+    import ai_test_engineer.bedrock as bedrock_module
+
+    def _bedrock_must_not_be_called(*args, **kwargs):
+        raise AssertionError("INVESTIGATE_FAILURE must never call get_bedrock_model")
+
+    monkeypatch.setattr(bedrock_module, "get_bedrock_model", _bedrock_must_not_be_called)
+
+    model = ScriptedModel(
+        turns=[
+            [("execute_tests", {})],
+            "Tests executed.",
+            [("finalize_analysis", {})],
+            "Analysis recorded.",
+            [("render_report", {})],
+            "Report finalized.",
+        ]
+    )
+    monkeypatch.setattr(checkpoints, "DeciderClient", _mock_decider_client_factory(httpx.MockTransport(_investigate_execution_decider_handler)))
+    run_id = _build_approved_run(tmp_path, model)  # built directly with ScriptedModel -- get_bedrock_model is never on this path either
+
+    result = orchestration.execute_approved_run(run_id)
+
+    assert run_calls == [1]  # exactly one pytest batch -- never reran to try for a different outcome
+    assert result["workflow_state"] == "COMPLETED"
+    controller = orchestration._ACTIVE_RUNS[run_id]["controller"]
+    assert controller.investigation_used is True
+
+    analysis = json.loads((controller.run_dir / "analysis.json").read_text())
+    assert analysis["handling_action"] == "INVESTIGATE_FAILURE"
+    assert analysis["investigated"] is True
+    # Same facts REPORT_FAILURE would have recorded -- investigation adds a
+    # label, not new content (no second data-gathering pass of any kind).
+    assert analysis["classification"] == "BUSINESS_RULE_VIOLATION"
+    assert analysis["expected_behavior"].startswith("BR06:")
+    assert analysis["actual_behavior"] == "Observed 2 ledger entries instead of 1 ledger entry."
+
+    results = json.loads((controller.run_dir / "results.json").read_text())
+    t04 = next(t for t in results["tests"] if t["test_id"] == "T04")
+    assert t04["status"] == "FAIL"  # unchanged -- never retried to green
+
+    report_metadata = json.loads((controller.run_dir / "report_metadata.json").read_text())
+    assert report_metadata["agent_workflow_status"] == "COMPLETED"
+    assert report_metadata["payment_verification_status"] == "FAILED"
+
+
 def test_execute_approved_run_defect_off_no_failure_skips_failure_checkpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     monkeypatch.setenv("AITE_DUPLICATE_LEDGER_DEFECT", "false")
