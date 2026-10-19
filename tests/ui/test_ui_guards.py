@@ -789,11 +789,12 @@ def test_decider_decision_value_rejected_by_guard_overrides_everything_else():
     assert ui.decider_decision_value(record) == "Rejected by guard: 5/5 required"
 
 
-def test_coverage_action_confidence_reads_the_question_not_the_batch_level_field():
+def test_primary_choice_confidence_reads_coverage_action_not_the_batch_level_field():
     """The coverage_action question's own confidence, distinct from the
     record's top-level "confidence" (the batch's lowest-scoring verdict,
-    compared against a different threshold -- see coverage_action_
-    confidence's docstring)."""
+    compared against a different threshold) -- coverage_action_confidence
+    was folded into the generic primary_choice_confidence (now shared with
+    reporting.py via ai_test_engineer.decision_trace)."""
     record = {
         "confidence": 0.5812,  # batch-level -- must be ignored here
         "per_question": [
@@ -801,11 +802,11 @@ def test_coverage_action_confidence_reads_the_question_not_the_batch_level_field
             {"question": "coverage_action", "confidence": 0.8711},
         ],
     }
-    assert ui.coverage_action_confidence(record) == 0.8711
+    assert ui.primary_choice_confidence(record) == 0.8711
 
 
-def test_coverage_action_confidence_none_when_question_absent():
-    assert ui.coverage_action_confidence({"per_question": []}) is None
+def test_primary_choice_confidence_none_when_question_absent():
+    assert ui.primary_choice_confidence({"per_question": []}) is None
 
 
 def test_round4_rounds_floats_and_passes_through_none():

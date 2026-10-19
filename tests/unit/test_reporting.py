@@ -4,10 +4,12 @@ built from hand-written fixture files (no live run, no Bedrock/Decider)."""
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 
 import pytest
 
-from ai_test_engineer import reporting
+from ai_test_engineer import decision_trace, reporting
 from ai_test_engineer.state import RunController
 
 
@@ -53,7 +55,7 @@ DECISIONS = [
         "confidence": 0.4242,
         "threshold": 0.75,
         "route": "AUTO",
-        "per_question": [{"question": "coverage_action", "answer": "ACCEPT_COVERAGE"}],
+        "per_question": [{"question": "coverage_action", "answer": "ACCEPT_COVERAGE", "confidence": 0.4242}],
     },
     {
         "checkpoint": "FAILURE",
@@ -108,6 +110,7 @@ def test_t04_failure_detail_block(controller):
 
     report = reporting.render_report(controller)
 
+    assert "**What happened:** Observed 2 ledger entries instead of 1 ledger entry." in report["report_text"]
     assert "BR06: Re-delivery of the same successful callback" in report["report_text"]
     assert "Books overstate the payment." in report["report_text"]
     assert "execution/T04_evidence.json" in report["report_text"]
@@ -170,3 +173,83 @@ def test_metadata_evidence_references_only_lists_files_that_exist(controller):
     report = reporting.render_report(controller)
 
     assert report["metadata"]["evidence_references"] == ["results.json"]
+
+
+# ---------------------------------------------------------------------------
+# report.md header: title, run ID, generated-at (UTC), requirement ID,
+# Decider host label + model, Bedrock model ID.
+# ---------------------------------------------------------------------------
+
+
+def test_header_title_and_run_id(controller):
+    report = reporting.render_report(controller)
+    text = report["report_text"]
+    assert text.startswith("# Assurance Agent Experience — AI Test Engineer Agent report")
+    assert "**Run ID:** run-1" in text
+
+
+def test_header_generated_at_is_utc_iso8601(controller):
+    report = reporting.render_report(controller)
+    match = re.search(r"\*\*Generated at \(UTC\):\*\* (\S+)", report["report_text"])
+    assert match is not None
+    datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%SZ")  # raises if not that exact shape
+
+
+def test_header_requirement_id_from_real_config(controller):
+    requirement = json.loads((reporting.CONFIG_DIR / "requirement.json").read_text())
+    report = reporting.render_report(controller)
+    assert f"**Requirement ID:** {requirement['requirement_id']}" in report["report_text"]
+
+
+def test_header_decider_host_label_and_model_from_real_config(controller, monkeypatch):
+    monkeypatch.delenv("AITE_DECIDER_HOST_LABEL", raising=False)
+    decider_cfg = json.loads((reporting.CONFIG_DIR / "decider.json").read_text())
+
+    report = reporting.render_report(controller)
+
+    assert f"**Decider:** {decider_cfg['host_label']} · {decider_cfg['model']}" in report["report_text"]
+
+
+def test_header_decider_host_label_env_override(controller, monkeypatch):
+    monkeypatch.setenv("AITE_DECIDER_HOST_LABEL", "ec2-g4dn-t4")
+    report = reporting.render_report(controller)
+    assert "**Decider:** ec2-g4dn-t4 ·" in report["report_text"]
+
+
+def test_header_bedrock_model_id_default(controller, monkeypatch):
+    monkeypatch.delenv("AITE_BEDROCK_MODEL_ID", raising=False)
+    from ai_test_engineer.bedrock import DEFAULT_MODEL_ID
+
+    report = reporting.render_report(controller)
+    assert f"**Bedrock model:** {DEFAULT_MODEL_ID}" in report["report_text"]
+
+
+def test_header_bedrock_model_id_env_override(controller, monkeypatch):
+    monkeypatch.setenv("AITE_BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5-5")
+    report = reporting.render_report(controller)
+    assert "**Bedrock model:** us.anthropic.claude-sonnet-5-5" in report["report_text"]
+
+
+# ---------------------------------------------------------------------------
+# Item 5: reporting.py and ui.py must use the SAME decision formatter.
+# ---------------------------------------------------------------------------
+
+
+def test_report_decision_trace_equals_build_decision_trace_output_directly(controller):
+    """report.md's trace table is built from decision_trace.build_decision_trace
+    -- the exact same function ui.py's Results/Scenarios pages call -- so
+    this asserts the report's trace rows are byte-for-byte the formatter's
+    own output, never a locally-reformatted copy that could drift."""
+    _write(controller, "results.json", RESULTS_DEFECT_ON)
+    _write(controller, "decisions.json", DECISIONS)
+    decider_cfg = json.loads((reporting.CONFIG_DIR / "decider.json").read_text())
+
+    expected_rows = decision_trace.build_decision_trace(DECISIONS, decider_cfg)
+    report = reporting.render_report(controller)
+
+    for row in expected_rows:
+        assert f"{row['icon']} {row['decision_text']}" in report["report_text"]
+        if row["confidence"] is not None:
+            assert f"{row['confidence']} vs {row['threshold']}" in report["report_text"]
+
+

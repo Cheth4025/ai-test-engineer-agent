@@ -54,6 +54,14 @@ import pandas as pd
 import streamlit as st
 
 from ai_test_engineer import checkpoints, orchestration, reporting
+from ai_test_engineer.decision_trace import (
+    build_decision_trace,
+    decider_decision_value,
+    decision_icon,
+    primary_choice_confidence,
+    round4,
+    round4_probabilities,
+)
 from ai_test_engineer.state import RunController
 
 CONFIG_DIR = orchestration.CONFIG_DIR
@@ -485,35 +493,6 @@ def format_assertion(assertion: dict) -> str:
     return f"{assertion['observation']} == {expected}"
 
 
-def coverage_action_confidence(record: dict) -> float | None:
-    """The coverage_action question's OWN confidence (per_question), not
-    the top-level record["confidence"] -- that top-level number is the
-    lowest-scoring verdict across the whole escalated batch (grounding
-    flags included), compared against noul_upper (0.8, the gate's own
-    route-level escalate/auto threshold) -- a different number for a
-    different purpose than the per-choice accept/escalate gate
-    (choice_threshold, 0.75) coverage_action is actually compared against.
-    Live-run evidence (decisions.json) confirms the two can disagree: one
-    COVERAGE record had a 0.65 batch-low confidence vs the 0.8 route gate,
-    while its own coverage_action question scored 0.87 vs the 0.75 choice
-    gate and resolved AUTO."""
-    for question in record.get("per_question") or []:
-        if question.get("question") == "coverage_action":
-            return question.get("confidence")
-    return None
-
-
-def primary_choice_confidence(record: dict) -> float | None:
-    """Same idea as coverage_action_confidence, generalized to whichever
-    primary choice question this record's checkpoint asked (STRATEGY/
-    COVERAGE/FAILURE/COMPLETION) -- for the Results page's Decider decision
-    trace, which spans every checkpoint, not just COVERAGE."""
-    for question in record.get("per_question") or []:
-        if question.get("question") in PRIMARY_CHOICE_QUESTIONS:
-            return question.get("confidence")
-    return None
-
-
 def build_evidence_zip(run_dir: Path) -> bytes | None:
     """An in-memory zip of the run folder's own JSON/log/xml/md files, built
     fresh at click time from files that already exist on disk -- never
@@ -532,67 +511,6 @@ def build_evidence_zip(run_dir: Path) -> bytes | None:
         for path in paths:
             archive.write(path, arcname=str(path.relative_to(run_dir)))
     return buffer.getvalue()
-
-
-def round4(value: float | None) -> float | None:
-    """Confidence/probability values round-trip through JSON as raw floats
-    (e.g. 0.41879999999999995) -- rounds for display only, never for
-    comparison/storage. Non-numeric/None values pass through unchanged."""
-    return round(value, 4) if isinstance(value, (int, float)) else value
-
-
-def round4_probabilities(probabilities: dict | None) -> dict:
-    return {key: round4(value) for key, value in (probabilities or {}).items()}
-
-
-# Every checkpoint in this codebase names its human-facing bounded choice
-# question "<noun>_action" -- the one question whose real answer is the
-# decision, as opposed to the gate's own internal action name ("Confirm"/
-# "Proceed") that selected_action carries for a DECIDER/REUSED record.
-PRIMARY_CHOICE_QUESTIONS = {"strategy_action", "coverage_action", "failure_action", "completion_action"}
-
-
-def decider_decision_value(record: dict) -> str:
-    """The real bounded-action choice (e.g. ACCEPT_COVERAGE/REMEDIATE_GAP)
-    for one decisions.json record, as the Decision line should read it --
-    never the gate's own internal "Confirm" action name, and never a
-    normal-looking choice for a pick a guard actually rejected (live-run
-    evidence: a human's "ACCEPT_COVERAGE" pick while coverage was 4/5 was
-    REJECTED by the 5/5 guard, but the old version of this function would
-    have shown it as a plain, accepted "ACCEPT_COVERAGE" decision).
-
-    - decision_status == "REJECTED": "Rejected by guard: <reason>".
-    - decision_source == "HUMAN_ESCALATION": the human's literal choice
-      (selected_action already IS that string) with " (human)" appended.
-    - DECIDER/REUSED whose primary choice question is still unanswered
-      (per_question's "answer" is None -- the escalation-moment record,
-      where selected_action is just the gate's "Confirm" action name, not
-      a real choice): "Awaiting human", not "Confirm".
-    - DECIDER/REUSED with an answered primary choice (resolved AUTO, no
-      escalation needed for that question even though the batch escalated
-      overall): that real answer.
-    """
-    if record.get("decision_status") == "REJECTED":
-        return f"Rejected by guard: {record.get('rejection_reason') or 'deterministic guard'}"
-    if record.get("decision_source") == "HUMAN_ESCALATION":
-        return f"{record.get('selected_action') or '—'} (human)"
-    for question in record.get("per_question") or []:
-        if question.get("question") in PRIMARY_CHOICE_QUESTIONS and question.get("answer") is not None:
-            return question["answer"]
-    return "Awaiting human"
-
-
-def decision_icon(record: dict) -> str:
-    """⏳ while a decision is still awaiting a human, ✅ once it's answered
-    or auto-resolved, ⛔ when a human's answer was rejected by a guard --
-    derived from decider_decision_value's own classification (never a
-    second, independently-drifting set of rules for the same record)."""
-    value = decider_decision_value(record)
-    if value.startswith("Rejected by guard"):
-        return "⛔"
-    if value == "Awaiting human":
-        return "⏳"
-    return "✅"
 
 
 def sidebar_pending_action(controller: RunController | None) -> dict | None:
@@ -638,14 +556,8 @@ def _host_label() -> str:
         return "unknown"
 
 
-def _choice_threshold() -> float | None:
-    """config/decider.json's choice_threshold (0.75) -- the per-question
-    accept/escalate gate a bounded choice like coverage_action is actually
-    compared against. Distinct from a record's own top-level "threshold"
-    field (noul_upper, 0.8), which gates the overall route, not any single
-    answer -- see coverage_action_confidence's docstring."""
-    decider_cfg = _load_json(CONFIG_DIR / "decider.json") or {}
-    return decider_cfg.get("choice_threshold")
+def _decider_cfg() -> dict:
+    return _load_json(CONFIG_DIR / "decider.json") or {}
 
 
 def gather_display_data(state: UIState) -> dict:
@@ -987,6 +899,22 @@ def _card_heading(text: str, *, prefix: str = "") -> None:
     st.markdown(f'<p class="aite-card-heading">{prefix_html}{html.escape(text)}</p>', unsafe_allow_html=True)
 
 
+def _render_decision_trace_rows(rows: list[dict]) -> None:
+    """Renders decision_trace.build_decision_trace's own rows verbatim --
+    the Scenarios page's COVERAGE-only card and the Results page's
+    all-checkpoints card both call this on their own (pre-filtered) row
+    list, so there is exactly one place that decides how a row looks."""
+    for row in rows:
+        st.markdown(f"Checkpoint: `{row['checkpoint']}`")
+        st.markdown(f"{row['icon']} Decision: `{row['decision_text']}`")
+        if row["confidence"] is not None:
+            threshold = row["threshold"] if row["threshold"] is not None else "—"
+            st.markdown(f"Confidence: {row['confidence']} vs τ {threshold}")
+        st.markdown(f"Route: {row['route']}")
+        st.markdown(f"Source: `{row['source']}`")
+        st.divider()
+
+
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
     pending = controller.pending_decision
     _render_action_anchor()  # whenever this renders, pending_action always names "decision" here
@@ -1313,8 +1241,10 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
         ),
         None,
     )
-    coverage_decisions = [d for d in (data.get("decisions") or []) if d.get("checkpoint") == "COVERAGE"]
-    if gap_entry is not None or coverage_decisions:
+    coverage_rows = [
+        row for row in build_decision_trace(data.get("decisions") or [], _decider_cfg()) if row["checkpoint"] == "COVERAGE"
+    ]
+    if gap_entry is not None or coverage_rows:
         gap_col, decider_col = st.columns(2)
         if gap_entry is not None:
             with gap_col, st.container(border=True):
@@ -1331,33 +1261,10 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                     f"**Coverage:** {coverage['covered']}/{coverage['required']} — "
                     "below the 5/5 acceptance guard"
                 )
-        if coverage_decisions:
+        if coverage_rows:
             with decider_col, st.container(border=True):
                 _card_heading("Strands Decider (2B) decision")
-                choice_threshold = round4(_choice_threshold())
-                for record in coverage_decisions:
-                    source = record.get("decision_source")
-                    st.markdown(f"Checkpoint: `{record.get('checkpoint')}`")
-                    st.markdown(f"{decision_icon(record)} Decision: `{decider_decision_value(record)}`")
-                    # The coverage_action question's OWN confidence vs the
-                    # per-choice gate (τ 0.75), not the record's top-level
-                    # confidence/threshold (the batch's lowest-scoring
-                    # verdict vs the route-level gate, 0.8 -- a different
-                    # number for a different question, see
-                    # coverage_action_confidence's docstring). A
-                    # HUMAN_ESCALATION record's top-level confidence/
-                    # threshold are always None (the human wasn't scored),
-                    # so that line is dropped entirely rather than showing
-                    # a dash-dash placeholder.
-                    if source != "HUMAN_ESCALATION":
-                        confidence = round4(coverage_action_confidence(record))
-                        st.markdown(
-                            f"Confidence: {confidence if confidence is not None else '—'} "
-                            f"vs τ {choice_threshold if choice_threshold is not None else '—'}"
-                        )
-                    st.markdown(f"Route: {record.get('route')}")
-                    st.markdown(f"Source: `{source}`")
-                    st.divider()
+                _render_decision_trace_rows(coverage_rows)
 
     with st.container(border=True):
         _card_heading("Gherkin")
@@ -1614,21 +1521,10 @@ def _render_page_results(state: UIState, data: dict) -> None:
 
     with decider_col, st.container(border=True):
         _card_heading("Decider decision trace")
-        choice_threshold = round4(_choice_threshold())
-        decision_records = data.get("decisions") or []
-        if not decision_records:
+        trace_rows = build_decision_trace(data.get("decisions") or [], _decider_cfg())
+        if not trace_rows:
             st.caption("No decisions recorded.")
-        for record in decision_records:
-            st.markdown(f"{decision_icon(record)} **{record.get('checkpoint')}**: {decider_decision_value(record)}")
-            if record.get("decision_source") != "HUMAN_ESCALATION":
-                confidence = round4(primary_choice_confidence(record))
-                st.caption(
-                    f"Confidence {confidence if confidence is not None else '—'} vs "
-                    f"τ {choice_threshold if choice_threshold is not None else '—'} · "
-                    f"Route {record.get('route')} · {record.get('decision_source')}"
-                )
-            else:
-                st.caption(f"Route {record.get('route')} · {record.get('decision_source')}")
+        _render_decision_trace_rows(trace_rows)
 
     if has_failure:
         with st.container(border=True):

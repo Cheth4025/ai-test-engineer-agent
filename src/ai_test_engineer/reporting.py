@@ -6,21 +6,26 @@ own report section say so (NOT RUN/unavailable) rather than being silently
 omitted, per F09's acceptance criteria. Called only from
 checkpoints.build_completion_checkpoint's resolve()/apply_human_decision,
 after the COMPLETION readiness guard has already passed -- never on its own.
+
+The decision trace is built by ai_test_engineer.decision_trace.
+build_decision_trace -- the SAME function ui.py's Results/Scenarios pages
+call -- so report.md and the UI can never show a different trace for the
+same run (see tests/unit/test_reporting.py's report-vs-UI-row test).
 """
 
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_test_engineer.bedrock import DEFAULT_MODEL_ID
+from ai_test_engineer.decision_trace import build_decision_trace
 from ai_test_engineer.state import RunController
 
-# Every checkpoint in this codebase names its human-facing bounded choice
-# question "<noun>_action" -- the one question whose real answer is the
-# decision, as opposed to the gate's own internal action name ("Confirm"/
-# "Proceed") that selected_action carries for a DECIDER/REUSED record.
-_PRIMARY_CHOICE_QUESTIONS = {"strategy_action", "coverage_action", "failure_action", "completion_action"}
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 
 
 def _load(path: Path) -> Any:
@@ -30,23 +35,13 @@ def _load(path: Path) -> Any:
         return None
 
 
-def _decision_value(record: dict) -> str:
-    """Same classification ui.py's decider_decision_value uses, generalized
-    to every checkpoint's own "<noun>_action" question rather than only
-    coverage_action -- this module never imports ui.py (a Streamlit-free
-    backend module), so the small shared logic is duplicated, not reused."""
-    if record.get("decision_status") == "REJECTED":
-        return f"Rejected by guard: {record.get('rejection_reason') or 'deterministic guard'}"
-    if record.get("decision_source") == "HUMAN_ESCALATION":
-        return f"{record.get('selected_action') or '—'} (human)"
-    for question in record.get("per_question") or []:
-        if question.get("question") in _PRIMARY_CHOICE_QUESTIONS and question.get("answer") is not None:
-            return question["answer"]
-    return "Awaiting human"
-
-
-def _round4(value: Any) -> Any:
-    return round(value, 4) if isinstance(value, (int, float)) else value
+def _resolve_host_label(decider_cfg: dict) -> str:
+    """Same precedence as checkpoints.resolve_host_label, reimplemented
+    locally (a one-line lookup) rather than importing checkpoints.py --
+    keeps this module's own dependency footprint to "recorded evidence +
+    static config", with no coupling to the Strands/DeciderGuardrail
+    machinery that module also carries."""
+    return os.environ.get("AITE_DECIDER_HOST_LABEL") or decider_cfg.get("host_label") or "unknown"
 
 
 def _results_table_md(results: dict | None) -> str:
@@ -65,6 +60,8 @@ def _failure_detail_md(analysis: dict | None) -> str:
     if not analysis or not analysis.get("has_failure"):
         return "No failure observed."
     lines = [
+        f"**What happened:** {analysis['actual_behavior']}",
+        "",
         f"**Rule violated:** {analysis['expected_behavior']}",
         "",
         "**Impact:**",
@@ -75,23 +72,21 @@ def _failure_detail_md(analysis: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _decision_trace_md(decisions: list[dict] | None) -> str:
-    if not decisions:
+def _decision_trace_md(decisions: list[dict] | None, decider_cfg: dict) -> str:
+    rows = build_decision_trace(decisions or [], decider_cfg)
+    if not rows:
         return "No decisions recorded."
     header = "| Checkpoint | Decision | Confidence vs τ | Route | Source |\n|---|---|---|---|---|"
-    rows = []
-    for record in decisions:
-        confidence = _round4(record.get("confidence"))
-        threshold = _round4(record.get("threshold"))
-        conf_text = (
-            f"{confidence if confidence is not None else '—'} vs "
-            f"{threshold if threshold is not None else '—'}"
+    lines = []
+    for row in rows:
+        confidence = row["confidence"] if row["confidence"] is not None else "—"
+        threshold = row["threshold"] if row["threshold"] is not None else "—"
+        conf_text = f"{confidence} vs {threshold}" if row["confidence"] is not None else "—"
+        lines.append(
+            f"| {row['checkpoint']} | {row['icon']} {row['decision_text']} | {conf_text} | "
+            f"{row['route']} | {row['source']} |"
         )
-        rows.append(
-            f"| {record.get('checkpoint')} | {_decision_value(record)} | {conf_text} | "
-            f"{record.get('route')} | {record.get('decision_source')} |"
-        )
-    return "\n".join([header, *rows])
+    return "\n".join([header, *lines])
 
 
 def _approval_md(approval: dict | None) -> str:
@@ -99,6 +94,21 @@ def _approval_md(approval: dict | None) -> str:
         return "NOT RUN -- no approval recorded."
     comment = f" Comment: {approval['comment']}" if approval.get("comment") else ""
     return f"{approval['decision']} by {approval['reviewer']} at {approval['timestamp']}.{comment}"
+
+
+def _header_md(controller: RunController, requirement: dict, decider_cfg: dict) -> str:
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    bedrock_model_id = os.environ.get("AITE_BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
+    lines = [
+        "# Assurance Agent Experience — AI Test Engineer Agent report",
+        "",
+        f"**Run ID:** {controller.run_id}",
+        f"**Generated at (UTC):** {generated_at}",
+        f"**Requirement ID:** {requirement.get('requirement_id', 'unknown')}",
+        f"**Decider:** {_resolve_host_label(decider_cfg)} · {decider_cfg.get('model', 'unknown')}",
+        f"**Bedrock model:** {bedrock_model_id}",
+    ]
+    return "\n".join(lines)
 
 
 def payment_verification_status(results: dict | None) -> str:
@@ -114,19 +124,21 @@ def render_report(controller: RunController) -> dict:
     decisions = _load(run_dir / "decisions.json") or []
     analysis = _load(run_dir / "analysis.json")
     approval = _load(run_dir / "approval.json")
+    requirement = _load(CONFIG_DIR / "requirement.json") or {}
+    decider_cfg = _load(CONFIG_DIR / "decider.json") or {}
 
     verification_status = payment_verification_status(results)
 
     body = "\n\n".join(
         [
-            "# AI Test Engineer Agent -- Report",
+            _header_md(controller, requirement, decider_cfg),
             f"**Agent workflow:** COMPLETED  \n**Payment verification:** {verification_status}",
             "## Results",
             _results_table_md(results),
             "## T04 failure detail",
             _failure_detail_md(analysis),
             "## Decider decision trace",
-            _decision_trace_md(decisions),
+            _decision_trace_md(decisions, decider_cfg),
             "## Human approval",
             _approval_md(approval),
             "## Statement",

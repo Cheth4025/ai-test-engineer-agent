@@ -1091,6 +1091,43 @@ def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path
     assert "COMPLETION" in markdown_text and "FINALIZE_RESULTS" in markdown_text
 
 
+def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypatch, tmp_path, ui_script_path):
+    """Item 5's literal cross-surface check: the Results page (real
+    Streamlit rendering, via AppTest) and reporting.render_report (real
+    report.md generation) read the exact same decisions.json/decider.json
+    for run-1 and must show the identical decision text + confidence/τ for
+    every row -- both go through decision_trace.build_decision_trace, the
+    one shared formatter."""
+    from ai_test_engineer import decision_trace, reporting
+
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "results")
+    at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
+    ui_markdown_text = " ".join(m.value for m in at.markdown)
+
+    decisions = json.loads((controller.run_dir / "decisions.json").read_text())
+    decider_cfg = json.loads((Path(__file__).resolve().parents[2] / "config" / "decider.json").read_text())
+    expected_rows = decision_trace.build_decision_trace(decisions, decider_cfg)
+    assert len(expected_rows) >= 3  # COVERAGE, FAILURE, COMPLETION -- the pairing collapsed nothing unexpected
+
+    report_text = reporting.render_report(controller)["report_text"]
+
+    for row in expected_rows:
+        assert f"{row['icon']} {row['decision_text']}" in ui_markdown_text or row["decision_text"] in ui_markdown_text
+        assert f"{row['icon']} {row['decision_text']}" in report_text
+        if row["confidence"] is not None:
+            assert str(row["confidence"]) in ui_markdown_text
+            assert f"{row['confidence']} vs {row['threshold']}" in report_text
+
+
 def test_results_page_evidence_tabs_and_downloads(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_completed_run(tmp_path)
