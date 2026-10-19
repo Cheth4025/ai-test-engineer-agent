@@ -59,6 +59,44 @@ def remediation_feedback(missing_ids: list[str], coverage: dict) -> str:
     )
 
 
+def _br_text_for_rule(requirement_text: str, rule_id: str) -> str:
+    """The verbatim "BR0N: ..." line from requirement.json's text -- never
+    paraphrased, matching how ui.py's parse_business_rules reads the same
+    source."""
+    for line in requirement_text.splitlines():
+        line = line.strip()
+        if line.startswith(f"{rule_id}:"):
+            return line
+    return rule_id
+
+
+def failure_facts(results: dict, requirement_text: str) -> dict:
+    """Deterministic, no-Bedrock facts for the FAILURE checkpoint -- which
+    test (if any) failed, its real expected/actual evidence from
+    execution.run_approved_tests' own results.json, and the BR text it's
+    linked to. Shared by tools.build_finalize_analysis_tool (so the tool's
+    own attempt_log result is meaningful, same spirit as save_scenario_set
+    independently computing coverage) and this module's own
+    build_failure_checkpoint (which recomputes it from the canonical
+    attempt_log result rather than trusting the tool's return value, same
+    pattern as build_coverage_checkpoint's _compute())."""
+    failed = [t for t in results["tests"] if t["status"] in ("FAIL", "ERROR")]
+    if not failed:
+        return {"has_failure": False}
+    test = failed[0]  # this fixed five-test suite has exactly one failure mode per run
+    rule_id = test["rule_ids"][0] if test["rule_ids"] else None
+    return {
+        "has_failure": True,
+        "test_id": test["test_id"],
+        "rule_ids": test["rule_ids"],
+        "rule_text": _br_text_for_rule(requirement_text, rule_id) if rule_id else None,
+        "expected": test["expected"],
+        "actual": test["actual"],
+        "failure_message": test["failure_message"],
+        "evidence_reference": test["evidence_reference"],
+    }
+
+
 def grounding_items(coverage: dict, verdicts: dict[str, Verdict]) -> list[dict]:
     """Builds the grounding sub-record from whatever verdicts are available.
 
@@ -371,6 +409,183 @@ def build_coverage_checkpoint(
     return CheckpointSpec(build_questions=build_questions, resolve=resolve, build_state=build_state)
 
 
+# ---------------------------------------------------------------------------
+# execute_tests: EXECUTING -- ungated (pytest is never a Decider action,
+# docs/04 Section 5). No checkpoint here; see orchestration.STAGE_TOOLS.
+# ---------------------------------------------------------------------------
+
+
+def _analysis_record(facts: dict, classification: str, handling_action: str) -> dict:
+    return {
+        "has_failure": True,
+        "test_id": facts["test_id"],
+        "rule_ids": facts["rule_ids"],
+        "classification": classification,
+        "classification_decision_ref": "decisions.json",
+        "observations": [
+            f"{facts['test_id']} expected {facts['expected']}, observed {facts['actual']}.",
+            facts["failure_message"] or "(no failure message captured)",
+        ],
+        "expected_behavior": facts["rule_text"],
+        "actual_behavior": f"Observed {facts['actual']} instead of {facts['expected']}.",
+        "impact": [
+            "Books/ledger overstate the payment for this logical charge.",
+            "Reconciliation against the real gateway charge count will disagree.",
+            "Risk of an incorrect refund or a duplicate shipment downstream.",
+        ],
+        "evidence_references": [facts["evidence_reference"]] if facts.get("evidence_reference") else [],
+        "missing_evidence": [] if facts.get("evidence_reference") else ["per-test evidence file not found"],
+        "handling_action": handling_action,
+        "investigated": handling_action == "INVESTIGATE_FAILURE",
+    }
+
+
+# ---------------------------------------------------------------------------
+# finalize_analysis: ANALYZING_RESULTS -- FAILURE checkpoint. Only ever
+# called (per orchestration._continue_to_analysis) when execute_tests
+# recorded at least one real FAIL/ERROR -- no "no failure" branch needed
+# here; that case skips this checkpoint entirely and goes straight to
+# REPORTING with a static analysis.json. No Bedrock call for the narrative
+# (deterministic, from failure_facts only) -- only the Decider's bounded
+# classify+action choice.
+# ---------------------------------------------------------------------------
+
+
+def build_failure_checkpoint(
+    attempt_log: AttemptLog, controller: RunController, requirement_text: str, holder: dict
+) -> CheckpointSpec:
+    def _compute() -> dict:
+        results = attempt_log.get_result("execute_tests")
+        facts = failure_facts(results, requirement_text)
+        holder["failure_facts"] = facts
+        return facts
+
+    def build_questions(state: Any) -> dict:
+        facts = _compute()
+        return {
+            "failure_class": {
+                "type": "choice",
+                "instructions": (
+                    f"{facts['test_id']} failed. Expected: {facts['expected']}. Actual: "
+                    f"{facts['actual']}. Failure message: {facts['failure_message']!r}. "
+                    f"Linked rule: {facts['rule_text']!r}. Classify this failure."
+                ),
+                "criteria": {
+                    "BUSINESS_RULE_VIOLATION": (
+                        f"The real recorded expected-vs-actual evidence shows the linked "
+                        "rule was actually violated -- not a runner/tooling problem."
+                    ),
+                    "INFRASTRUCTURE_ERROR": (
+                        "The failure is a runner/tooling problem (crash, missing fixture, "
+                        "setup error), not a real business-rule assertion failure."
+                    ),
+                    "INSUFFICIENT_EVIDENCE": (
+                        "The available evidence does not clearly show whether a business "
+                        "rule was violated."
+                    ),
+                },
+            },
+            "failure_action": {
+                "type": "choice",
+                "instructions": (
+                    "Given this failure, should the agent investigate further (one bounded, "
+                    "read-only pass over the existing evidence) or report the defect now? "
+                    "The agent never fixes code, never retries to green, and never reruns "
+                    "the suite."
+                ),
+                "criteria": {
+                    "REPORT_FAILURE": (
+                        "The evidence already clearly supports the classification and "
+                        "impact; report the defect now."
+                    ),
+                    "INVESTIGATE_FAILURE": (
+                        "One bounded, read-only look at the already-captured evidence would "
+                        "strengthen the report before it is finalized."
+                    ),
+                },
+            },
+        }
+
+    def build_state(state: Any) -> dict:
+        return {"failure_facts": holder["failure_facts"]}
+
+    def resolve(verdicts: dict[str, Verdict]) -> Proceed | Deny:
+        facts = holder["failure_facts"]
+        failure_class = verdicts["failure_class"].answer
+        action = verdicts["failure_action"].answer
+        if failure_class == "BUSINESS_RULE_VIOLATION" and not facts["has_failure"]:
+            # Deterministic, never overridable (docs/05 Section 11: "controller
+            # rejects BUSINESS_RULE_VIOLATION when no failed assertion exists").
+            return Deny(reason="BUSINESS_RULE_VIOLATION denied: no failed test recorded in results.json")
+        if action == "INVESTIGATE_FAILURE":
+            controller.use_investigation()
+        controller.save_evidence("analysis.json", _analysis_record(facts, failure_class, action))
+        return Proceed()
+
+    return CheckpointSpec(build_questions=build_questions, resolve=resolve, build_state=build_state)
+
+
+# ---------------------------------------------------------------------------
+# render_report: REPORTING -- COMPLETION checkpoint. A YES never overrides a
+# missing artifact (docs/04 Section 3 / docs/05 Section 6) -- resolve()'s
+# readiness guard runs regardless of what the Decider/human answered.
+# ---------------------------------------------------------------------------
+
+
+def build_completion_checkpoint(attempt_log: AttemptLog, controller: RunController, holder: dict) -> CheckpointSpec:
+    def _compute() -> dict:
+        ready = {
+            "results_exists": (controller.run_dir / "results.json").exists(),
+            "analysis_exists": (controller.run_dir / "analysis.json").exists(),
+        }
+        holder["completion_ready"] = ready
+        return ready
+
+    def build_questions(state: Any) -> dict:
+        ready = _compute()
+        return {
+            "completion_action": {
+                "type": "choice",
+                "instructions": (
+                    f"results.json present: {ready['results_exists']}. analysis.json "
+                    f"present: {ready['analysis_exists']}. Is the evidence complete and "
+                    "consistent enough to finalize the report now?"
+                ),
+                "criteria": {
+                    "FINALIZE_RESULTS": (
+                        "All required evidence (results.json, and analysis.json if a test "
+                        "failed) is present and consistent; finalize now."
+                    ),
+                    "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet.",
+                },
+            }
+        }
+
+    def build_state(state: Any) -> dict:
+        return {"completion_ready": holder["completion_ready"]}
+
+    def resolve(verdicts: dict[str, Verdict]) -> Proceed | Deny:
+        ready = holder["completion_ready"]
+        action = verdicts["completion_action"].answer
+        if action != "FINALIZE_RESULTS":
+            controller.set_workflow_state("BLOCKED", stage="BLOCKED", busy=False)
+            reason = "COMPLETION checkpoint: evidence not ready to finalize; BLOCKED."
+            controller.set_halt(reason)
+            return Deny(reason=reason)
+        if not ready["results_exists"]:
+            return Deny(reason="FINALIZE_RESULTS denied: results.json missing")
+        if not ready["analysis_exists"]:
+            return Deny(reason="FINALIZE_RESULTS denied: analysis.json missing")
+        from ai_test_engineer import reporting  # local import: reporting imports nothing from here
+
+        report = reporting.render_report(controller)
+        controller.save_evidence("report_metadata.json", report["metadata"])
+        controller.set_workflow_state("COMPLETED", stage="COMPLETED", busy=False)
+        return Proceed()
+
+    return CheckpointSpec(build_questions=build_questions, resolve=resolve, build_state=build_state)
+
+
 class StageGuard(InterventionHandler):
     """Registered ahead of HaltGuard/DeciderGuardrail: denies any tool not
     allowed at the run's current stage (docs/03 Section 3: "Tools available
@@ -449,6 +664,8 @@ def _checkpoint_name(tool_name: str) -> str:
     return {
         "generate_scenarios": "AMBIGUITY+STRATEGY",
         "save_scenario_set": "COVERAGE",
+        "finalize_analysis": "FAILURE",
+        "render_report": "COMPLETION",
     }.get(tool_name, tool_name)
 
 
@@ -573,7 +790,12 @@ def decision_record_reused(
 
 
 def build_all(
-    attempt_log: AttemptLog, catalog: dict, controller: RunController, decider_cfg: dict, holder: dict
+    attempt_log: AttemptLog,
+    catalog: dict,
+    controller: RunController,
+    decider_cfg: dict,
+    holder: dict,
+    requirement_text: str = "",
 ):
     host_label = resolve_host_label(decider_cfg)
     client = DeciderClient(
@@ -589,6 +811,8 @@ def build_all(
     checkpoints = {
         "generate_scenarios": build_generate_scenarios_checkpoint(attempt_log, controller),
         "save_scenario_set": build_coverage_checkpoint(attempt_log, catalog, controller, holder),
+        "finalize_analysis": build_failure_checkpoint(attempt_log, controller, requirement_text, holder),
+        "render_report": build_completion_checkpoint(attempt_log, controller, holder),
     }
 
     def on_decision(tool_name: str, verdicts: dict[str, Verdict], action: Any) -> None:
@@ -610,7 +834,9 @@ def build_all(
                 # populated by the time any decision (AUTO or escalated) fires.
                 coverage = holder["coverage"]
                 controller.record_grounding(coverage["scenario_set_version"], grounding_items(coverage, verdicts))
-            pending_ctx = dict(holder) if tool_name == "save_scenario_set" else {}
+            pending_ctx = (
+                dict(holder) if tool_name in ("save_scenario_set", "finalize_analysis", "render_report") else {}
+            )
             controller.set_pending_decision(
                 {
                     "tool_name": tool_name,
@@ -698,4 +924,46 @@ def apply_human_decision(pending: dict, human_choice: str, controller: RunContro
             controller.set_halt("AWAITING_CLARIFICATION: do not call further tools")
             return "AWAITING_CLARIFICATION", None
         raise ValueError(f"unrecognized human_choice {human_choice!r} for generate_scenarios")
+    if tool_name == "finalize_analysis":
+        facts = pending["context"]["failure_facts"]
+        verdict_fields = pending.get("verdicts", {})
+        failure_class_fields = verdict_fields.get("failure_class", {})
+        failure_class = failure_class_fields.get("answer") or failure_class_fields.get("suggestion")
+        if human_choice not in ("INVESTIGATE_FAILURE", "REPORT_FAILURE"):
+            raise ValueError(f"unrecognized human_choice {human_choice!r} for finalize_analysis")
+        if failure_class == "BUSINESS_RULE_VIOLATION" and not facts["has_failure"]:
+            controller.record_decision(
+                _decision_record_human(
+                    pending, human_choice, status="REJECTED", rejection_reason="no failed test recorded"
+                )
+            )
+            return "REJECTED_RETRY", None
+        controller.record_decision(_decision_record_human(pending, human_choice, status="VALIDATED"))
+        if human_choice == "INVESTIGATE_FAILURE":
+            controller.use_investigation()
+        controller.save_evidence("analysis.json", _analysis_record(facts, failure_class, human_choice))
+        return "PROCEED", None
+    if tool_name == "render_report":
+        ready = pending["context"].get("completion_ready", {})
+        if human_choice == "FINALIZE_RESULTS":
+            if not ready.get("results_exists") or not ready.get("analysis_exists"):
+                controller.record_decision(
+                    _decision_record_human(
+                        pending, human_choice, status="REJECTED", rejection_reason="required evidence missing"
+                    )
+                )
+                return "REJECTED_RETRY", None
+            controller.record_decision(_decision_record_human(pending, human_choice, status="VALIDATED"))
+            from ai_test_engineer import reporting  # local import: reporting imports nothing from here
+
+            report = reporting.render_report(controller)
+            controller.save_evidence("report_metadata.json", report["metadata"])
+            controller.set_workflow_state("COMPLETED", stage="COMPLETED", busy=False)
+            return "PROCEED", None
+        if human_choice == "NOT_READY":
+            controller.record_decision(_decision_record_human(pending, human_choice, status="VALIDATED"))
+            controller.set_workflow_state("BLOCKED", stage="BLOCKED", busy=False)
+            controller.set_halt("COMPLETION checkpoint: human held completion; BLOCKED.")
+            return "BLOCKED", None
+        raise ValueError(f"unrecognized human_choice {human_choice!r} for render_report")
     raise ValueError(f"unrecognized pending tool {tool_name!r}")

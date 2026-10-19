@@ -40,8 +40,18 @@ def _test_id_for(node_name: str) -> str:
 
 
 def write_evidence(test_id: str, record: dict) -> Path:
-    artifact_root = Path(os.environ.get("AITE_ARTIFACT_ROOT", "./runs"))
-    evidence_dir = artifact_root / "milestone1" / "execution"
+    """AITE_RUN_EXECUTION_DIR wins when set -- execution.py sets it to the
+    real run's execution/ directory when it spawns this suite as a child
+    process (docs/07 Section 4: "Child receives ... evidence path through
+    controller-generated environment values"). Falls back to the historical
+    milestone1/execution path for a bare `pytest tests/payment` run outside
+    any run context."""
+    run_execution_dir = os.environ.get("AITE_RUN_EXECUTION_DIR")
+    if run_execution_dir:
+        evidence_dir = Path(run_execution_dir)
+    else:
+        artifact_root = Path(os.environ.get("AITE_ARTIFACT_ROOT", "./runs"))
+        evidence_dir = artifact_root / "milestone1" / "execution"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     evidence_path = evidence_dir / f"{test_id}_evidence.json"
     evidence_path.write_text(json.dumps(record, indent=2, default=str))

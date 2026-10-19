@@ -45,9 +45,12 @@ from ai_test_engineer.coverage import compute_coverage
 from ai_test_engineer.state import RunController
 from ai_test_engineer.tools import (
     AttemptLog,
+    build_execute_tests_tool,
+    build_finalize_analysis_tool,
     build_generate_missing_scenarios_tool,
     build_generate_scenarios_tool,
     build_interpret_requirement_tool,
+    build_render_report_tool,
     build_save_scenario_set_tool,
 )
 
@@ -63,6 +66,9 @@ STAGE_TOOLS: dict[str, frozenset[str]] = {
     "SCORING": frozenset({"save_scenario_set"}),
     "REMEDIATING": frozenset({"generate_missing_scenarios"}),
     "RESCORING": frozenset({"save_scenario_set"}),
+    "EXECUTING": frozenset({"execute_tests"}),
+    "ANALYZING_RESULTS": frozenset({"finalize_analysis"}),
+    "REPORTING": frozenset({"render_report"}),
 }
 
 # run_id -> {agent, controller, attempt_log, catalog, holder, last_result}
@@ -342,6 +348,97 @@ def _continue_to_scoring(run_id: str) -> dict:
     return _finish_run(run_id)
 
 
+def execute_approved_run(run_id: str) -> dict:
+    """Drives EXECUTING -> ANALYZING_RESULTS -> REPORTING in one call, same
+    chaining shape as run_initial_pass's own INTERPRETING -> GENERATING ->
+    SCORING chain, pausing (via _paused, same pending_decision/escalation_seq
+    machinery) only if the new FAILURE or COMPLETION checkpoint actually
+    escalates. use_execution() is the data-layer backstop against a second
+    Execute -- the UI's disabled button is only a convenience."""
+    run = _ACTIVE_RUNS[run_id]
+    controller: RunController = run["controller"]
+    if controller.workflow_state != "APPROVED":
+        raise RuntimeError(
+            f"execute_approved_run requires workflow_state APPROVED, got {controller.workflow_state!r}"
+        )
+    if not controller.use_execution():
+        raise RuntimeError(f"run {run_id} has already started execution")
+
+    execute_tool = build_execute_tests_tool(run["attempt_log"], controller)
+    run["agent"].tool_registry.process_tools([execute_tool])
+    controller.set_stage("EXECUTING", STAGE_TOOLS["EXECUTING"])
+    controller.set_workflow_state("EXECUTING", stage="EXECUTING", busy=True)
+    result = run["agent"]("Call execute_tests now that the run is approved.")  # ungated
+    run["last_result"] = result
+    if result.stop_reason == "interrupt":
+        # execute_tests is never a checkpoints key (pytest is never a
+        # Decider action, docs/04 Section 5) -- this cannot fire; kept for
+        # defense-in-depth / API symmetry with _unexpected_interrupt_stop's
+        # other call sites.
+        return _unexpected_interrupt_stop(run_id, controller, result, "execute_tests turn")
+
+    return _continue_to_analysis(run_id)
+
+
+def _continue_to_analysis(run_id: str) -> dict:
+    run = _ACTIVE_RUNS[run_id]
+    controller: RunController = run["controller"]
+    attempt_log: AttemptLog = run["attempt_log"]
+
+    results = attempt_log.get_result("execute_tests")
+    if results is None:
+        raise RuntimeError(
+            "execute_tests did not produce a valid result after "
+            f"{attempt_log.count('execute_tests')} attempt(s); stopping run."
+        )
+    controller.save_evidence("results.json", results)
+    controller.set_workflow_state("ANALYZING_RESULTS", stage="ANALYZING_RESULTS", busy=True)
+
+    has_failure = any(t["status"] in ("FAIL", "ERROR") for t in results["tests"])
+    if not has_failure:
+        # F08's explicit no-failure case: an honest note, never the
+        # injected-defect result fabricated when nothing actually failed.
+        controller.save_evidence(
+            "analysis.json",
+            {"has_failure": False, "note": "All five tests passed; no failure to analyze."},
+        )
+        return _continue_to_reporting(run_id)
+
+    analysis_tool = build_finalize_analysis_tool(attempt_log)
+    run["agent"].tool_registry.process_tools([analysis_tool])
+    controller.set_stage("ANALYZING_RESULTS", STAGE_TOOLS["ANALYZING_RESULTS"])
+    result = run["agent"]("Call finalize_analysis now to classify and handle the test failure.")  # gated: FAILURE
+    run["last_result"] = result
+    if result.stop_reason == "interrupt":
+        return _paused(run_id, controller)
+    if controller.workflow_state == "BLOCKED":
+        _write_tool_attempts(run_id)
+        return {"run_id": run_id, "workflow_state": "BLOCKED", "stage": "BLOCKED"}
+
+    return _continue_to_reporting(run_id)
+
+
+def _continue_to_reporting(run_id: str) -> dict:
+    run = _ACTIVE_RUNS[run_id]
+    controller: RunController = run["controller"]
+    attempt_log: AttemptLog = run["attempt_log"]
+
+    controller.set_workflow_state("REPORTING", stage="REPORTING", busy=True)
+    report_tool = build_render_report_tool(attempt_log, controller)
+    run["agent"].tool_registry.process_tools([report_tool])
+    controller.set_stage("REPORTING", STAGE_TOOLS["REPORTING"])
+    result = run["agent"]("Call render_report now to finalize the run.")  # gated: COMPLETION
+    run["last_result"] = result
+    if result.stop_reason == "interrupt":
+        return _paused(run_id, controller)
+    if controller.workflow_state == "BLOCKED":
+        _write_tool_attempts(run_id)
+        return {"run_id": run_id, "workflow_state": "BLOCKED", "stage": "BLOCKED"}
+
+    _write_tool_attempts(run_id)
+    return {"run_id": run_id, "workflow_state": controller.workflow_state, "stage": controller.stage}
+
+
 def run_initial_pass() -> dict:
     run_id = _new_run_id()
     run_dir = _artifact_root() / run_id
@@ -358,7 +455,7 @@ def run_initial_pass() -> dict:
     generate_scenarios = build_generate_scenarios_tool(attempt_log, INITIAL_TARGET_IDS)
     save_scenario_set = build_save_scenario_set_tool(attempt_log, catalog)
     client, gate, checkpoints, on_decision, on_error, host_label = build_all(
-        attempt_log, catalog, controller, decider_cfg, holder
+        attempt_log, catalog, controller, decider_cfg, holder, requirement_text
     )
 
     def on_reuse(tool_name: str, verdicts: dict, action, origin_tool_use_id: str | None) -> None:
@@ -505,4 +602,15 @@ def resume_pending_decision(run_id: str, human_choice: str) -> dict:
         # scenario set that was never actually scored. See
         # _continue_to_scoring's docstring.
         return _continue_to_scoring(run_id)
+    if outcome == "PROCEED" and pending["tool_name"] == "finalize_analysis":
+        # The FAILURE checkpoint's own escalation, now answered by a human:
+        # continue into REPORTING, same shape as generate_scenarios above.
+        return _continue_to_reporting(run_id)
+    if outcome == "PROCEED" and pending["tool_name"] == "render_report":
+        # The COMPLETION checkpoint's own escalation: apply_human_decision's
+        # render_report branch already wrote report.md and set workflow_state
+        # COMPLETED directly (same as its resolve() counterpart) -- nothing
+        # further to drive.
+        _write_tool_attempts(run_id)
+        return {"run_id": run_id, "workflow_state": controller.workflow_state, "stage": controller.stage}
     return _finish_run(run_id)  # PROCEED (save_scenario_set's ACCEPT_COVERAGE)

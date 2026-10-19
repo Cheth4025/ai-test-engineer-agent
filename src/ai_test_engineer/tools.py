@@ -20,6 +20,7 @@ from typing import Any
 from pydantic import BaseModel
 from strands import tool
 
+from ai_test_engineer import execution
 from ai_test_engineer.coverage import compute_coverage
 
 MAX_TOOL_ATTEMPTS = 2
@@ -336,3 +337,89 @@ def build_save_scenario_set_tool(attempt_log: AttemptLog, catalog: dict):
         return _run_with_attempt_cap(attempt_log, "save_scenario_set", _validate)
 
     return save_scenario_set
+
+
+# ---------------------------------------------------------------------------
+# F07 -- run the approved fixed T01-T05 batch (docs/05 Section 10). No
+# Bedrock content here: execute_tests is a zero-arg tool, like
+# save_scenario_set, that does real deterministic work (a pytest subprocess)
+# rather than validating model-generated arguments.
+# ---------------------------------------------------------------------------
+
+
+def build_execute_tests_tool(attempt_log: AttemptLog, controller):
+    @tool
+    def execute_tests() -> dict:
+        """Run the fixed, approved T01-T05 pytest batch exactly once and record results.
+
+        Takes no arguments. Call this immediately once the run is APPROVED.
+        """
+
+        def _validate() -> dict:
+            try:
+                return execution.run_approved_tests(controller)
+            except execution.ExecutionError as exc:
+                raise BedrockOutputError(str(exc)) from exc
+
+        return _run_with_attempt_cap(attempt_log, "execute_tests", _validate)
+
+    return execute_tests
+
+
+# ---------------------------------------------------------------------------
+# F08 -- gate into the FAILURE checkpoint (docs/04 Section 3). Zero-arg,
+# ungated content: checkpoints.build_failure_checkpoint independently
+# recomputes the same facts from attempt_log.get_result("execute_tests")
+# (same decoupling as save_scenario_set/build_coverage_checkpoint), so this
+# tool's own return value only needs to be non-None to mark the attempt a
+# success -- the checkpoint's resolve()/apply_human_decision is what writes
+# analysis.json.
+# ---------------------------------------------------------------------------
+
+
+def build_finalize_analysis_tool(attempt_log: AttemptLog):
+    @tool
+    def finalize_analysis() -> dict:
+        """Classify and handle the execute_tests failure, if any.
+
+        Takes no arguments. Call this once execute_tests has produced results.
+        """
+
+        def _validate() -> dict:
+            results = attempt_log.get_result("execute_tests")
+            if results is None:
+                raise BedrockOutputError("finalize_analysis called before execute_tests succeeded")
+            return results
+
+        return _run_with_attempt_cap(attempt_log, "finalize_analysis", _validate)
+
+    return finalize_analysis
+
+
+# ---------------------------------------------------------------------------
+# F09 -- gate into the COMPLETION checkpoint (docs/04 Section 3). Same
+# decoupling as above: checkpoints.build_completion_checkpoint's own
+# resolve()/apply_human_decision does the real readiness guard and the real
+# report.md write (via reporting.render_report), only once the guard has
+# already passed.
+# ---------------------------------------------------------------------------
+
+
+def build_render_report_tool(attempt_log: AttemptLog, controller):
+    @tool
+    def render_report() -> dict:
+        """Finalize and write the run's report.md, if the evidence is ready.
+
+        Takes no arguments. Call this once execute_tests/finalize_analysis
+        have produced their evidence.
+        """
+
+        def _validate() -> dict:
+            return {
+                "results_exists": (controller.run_dir / "results.json").exists(),
+                "analysis_exists": (controller.run_dir / "analysis.json").exists(),
+            }
+
+        return _run_with_attempt_cap(attempt_log, "render_report", _validate)
+
+    return render_report
