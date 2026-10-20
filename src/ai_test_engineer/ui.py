@@ -1117,24 +1117,25 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
     _render_page_header("Overview")
     _render_action_banner(data, "requirements")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        use_case_body = (
-            ui_components.labeled_section("aae-label-problem", "PROBLEM", _USE_CASE_PROBLEM)
-            + ui_components.labeled_section("aae-label-impact", "IMPACT", _USE_CASE_IMPACT)
-            + ui_components.labeled_section("aae-label-mitigation", "MITIGATION", _USE_CASE_MITIGATION)
-        )
-        st.markdown(ui_components.card("The use case", use_case_body), unsafe_allow_html=True)
-    with col2:
-        requirement = data["requirement"] or {}
-        rules = parse_business_rules(requirement.get("text"))
-        br_rows = [
-            [ui_components.escape(r["rule_id"]), ui_components.escape(r["label"]), ui_components.escape(r["description"])] for r in rules
-        ]
-        br_body = ui_components.table(["ID", "Rule", "Description"], br_rows) + ui_components.small_caption(
-            "Loaded from the requirements catalog — wording follows the source file."
-        )
-        st.markdown(ui_components.card("Business rules (BR01 – BR06)", br_body), unsafe_allow_html=True)
+    # "The use case" and "Business rules" each span the full content width,
+    # stacked vertically -- unlike "Key acceptance criteria"/"What the
+    # agent does" below, which stay side by side.
+    use_case_body = (
+        ui_components.labeled_section("aae-label-problem", "PROBLEM", _USE_CASE_PROBLEM)
+        + ui_components.labeled_section("aae-label-impact", "IMPACT", _USE_CASE_IMPACT)
+        + ui_components.labeled_section("aae-label-mitigation", "MITIGATION", _USE_CASE_MITIGATION)
+    )
+    st.markdown(ui_components.card("The use case", use_case_body), unsafe_allow_html=True)
+
+    requirement = data["requirement"] or {}
+    rules = parse_business_rules(requirement.get("text"))
+    br_rows = [
+        [ui_components.escape(r["rule_id"]), ui_components.escape(r["label"]), ui_components.escape(r["description"])] for r in rules
+    ]
+    br_body = ui_components.table(["ID", "Rule", "Description"], br_rows) + ui_components.small_caption(
+        "Loaded from the requirements catalog — wording follows the source file."
+    )
+    st.markdown(ui_components.card("Business rules (BR01 – BR06)", br_body), unsafe_allow_html=True)
 
     col3, col4 = st.columns(2)
     with col3:
