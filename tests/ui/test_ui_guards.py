@@ -937,9 +937,10 @@ def test_app_title_is_assurance_agent_experience():
     assert ui.APP_TITLE == "Assurance Agent Experience"
 
 
-def test_base_css_carries_the_new_title_and_not_the_old_one():
-    assert ui.APP_TITLE in ui._BASE_CSS
-    assert "AI Test Engineer Agent" not in ui._BASE_CSS
+def test_title_css_carries_the_new_title_and_not_the_old_one():
+    title_css = ui._title_css(ui.APP_TITLE)
+    assert ui.APP_TITLE in title_css
+    assert "AI Test Engineer Agent" not in title_css
 
 
 def test_page_config_kwargs_use_the_new_title():

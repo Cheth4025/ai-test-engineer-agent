@@ -53,7 +53,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from ai_test_engineer import checkpoints, orchestration, reporting
+from ai_test_engineer import checkpoints, orchestration, reporting, ui_components
 from ai_test_engineer.decision_trace import (
     build_decision_trace,
     decider_decision_value,
@@ -621,145 +621,32 @@ def gather_display_data(state: UIState) -> dict:
 # Rendering -- Streamlit-dependent; exercised by tests/ui/test_ui_apptest.py.
 # ---------------------------------------------------------------------------
 
-# Top-bar text/chips and Approve/Reject's fixed colors have no [theme]/
-# [theme.sidebar] config equivalent (theme options style the main area and
-# sidebar, never Streamlit's own header chrome, and there's no per-button
-# color option, nor a way to put real-time text into the header without
-# JavaScript) -- all explicitly requested as scoped CSS plus a real
-# Streamlit-rendered, position:fixed markdown block layered on top of the
-# header (still zero JS: just HTML/CSS via st.markdown(unsafe_allow_html=
-# True), re-rendered fresh every fragment tick with real Python values).
-# Vertical .block-container padding stays native: theme.paddingTop/
-# theme.sidebar.paddingTop/theme.paddingBottom in .streamlit/config.toml
-# (reduced there for the tightened layout) are the officially-recommended
-# mechanism and already reserve space for the header's height
-# automatically -- stacking CSS padding-top on top of that would double it.
-# Side padding and max-width have no native theme equivalent, so those are
-# CSS here, per the explicit "CSS only" layout-tightening request.
-_BASE_CSS_TEMPLATE = """
-<style>
-[data-testid="stHeader"] {
-    background-color: #0F1B2D;
-}
-/* left: 0 -- flush with the sidebar's own left edge, not offset past the
-   sidebar-collapse arrow (which lives inside the sidebar panel in this
-   Streamlit build, not in the header, so there's nothing in the header to
-   leave room for). */
-[data-testid="stHeader"]::before {
-    content: "__APP_TITLE__";
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #F5F5F5;
-    font-size: 22px;
-    font-weight: 700;
-    white-space: nowrap;
-}
-.aite-status-chips {
-    position: fixed;
-    top: 0.6rem;
-    right: 1rem;
-    z-index: 999999;
-    display: flex;
-    gap: 0.5rem;
-}
-.aite-chip {
-    background-color: rgba(255, 255, 255, 0.12);
-    color: #F5F5F5;
-    font-family: monospace;
-    font-size: 0.75rem;
-    padding: 0.25rem 0.6rem;
-    border-radius: 999px;
-    white-space: nowrap;
-}
-.st-key-approve_btn button {
-    background-color: #16A34A !important;
-    color: #FFFFFF !important;
-    border-color: #16A34A !important;
-}
-.st-key-reject_btn button {
-    background-color: #DC2626 !important;
-    color: #FFFFFF !important;
-    border-color: #DC2626 !important;
-}
-/* Disabled must still look clearly disabled (grey) -- declared after the
-   rules above and :disabled is more specific, so this wins over the fixed
-   green/red whenever the button is actually disabled. */
-.st-key-approve_btn button:disabled,
-.st-key-reject_btn button:disabled {
-    background-color: #E5E7EB !important;
-    color: #9CA3AF !important;
-    border-color: #D1D5DB !important;
-}
-
-/* -- Sidebar: narrow, tight nav (width/min/max pinned to disable the drag
-   handle at a size wider than the nav labels need) -- */
-[data-testid="stSidebar"] {
-    width: 240px !important;
-    min-width: 240px !important;
-    max-width: 240px !important;
-}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 6px !important;
-}
-[class*="st-key-nav_"] button {
-    height: 40px !important;
-}
-[class*="st-key-nav_"] button > div {
-    justify-content: flex-start !important;
-}
-
-/* -- Main content: fill the page. Vertical padding is native (config.toml);
-   side padding/max-width have no theme equivalent. -- */
-.block-container {
-    padding-left: 1.5rem !important;
-    padding-right: 1.5rem !important;
-    max-width: 100% !important;
-}
-
-/* -- Typography -- */
-.block-container h1 {
-    font-size: 30px !important;
-}
-[data-testid="stCaptionContainer"] p {
-    font-size: 15px !important;
-}
-/* :not() excludes .aite-card-heading's own <p> -- without it this rule's
-   higher specificity (class + attribute + tag) would win over the
-   heading's single-class rule below despite both using !important. */
-.block-container [data-testid="stMarkdownContainer"] p:not(.aite-card-heading) {
-    font-size: 15px !important;
-}
-.aite-card-heading {
-    font-size: 17px !important;
-    font-weight: 600 !important;
-    margin: 0 0 0.5rem 0 !important;
-}
-.block-container [data-testid="stTable"] * {
-    font-size: 14px !important;
-}
-
-/* -- Cards: tighter inner padding. No official data-testid distinguishes a
-   bordered st.container from an unbordered one in this Streamlit build
-   (1.66.0) -- verified directly that every st.container(border=True) here
-   renders with this exact emotion-cache class; unbordered wrapper blocks
-   use a different one and are unaffected. Version-pinned and somewhat
-   fragile (an internal, auto-generated class name): re-verify this
-   selector by inspecting a card's computed class if Streamlit is ever
-   upgraded. -- */
-.block-container .st-emotion-cache-1te8eqs {
-    padding: 10px !important;
-}
-/* Vertical gap between stacked blocks in the main content column (title
-   row -> card row -> card row, same spirit as the sidebar's 6px gap
-   above) -- helps the Overview page fit on one 1080p screen. */
-.block-container > [data-testid="stVerticalBlock"] {
-    gap: 10px !important;
-}
-</style>
-"""
-_BASE_CSS = _BASE_CSS_TEMPLATE.replace("__APP_TITLE__", APP_TITLE)
+# Top-bar title has no [theme]/[theme.sidebar] config equivalent (theme
+# options style the main area and sidebar, never Streamlit's own header
+# chrome) -- a scoped ::before pseudo-element carrying APP_TITLE, kept
+# separate from ui_components.AAE_CSS (which is APP_TITLE-independent and
+# shared with every other aae- selector). All other top-bar/sidebar/card/
+# table/pill/etc. styling lives in ui_components.AAE_CSS -- see that
+# module's docstring for the full token-to-selector mapping.
+# .block-container's padding is CSS-only (24px 28px, all four sides, per
+# ui_components.AAE_CSS): .streamlit/config.toml's theme.paddingTop/
+# paddingBottom are pinned to "0rem" so the two mechanisms never stack.
+def _title_css(app_title: str) -> str:
+    return f"""
+    <style>
+    [data-testid="stHeader"]::before {{
+        content: "{html.escape(app_title)}";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #F5F5F5;
+        font-size: 18px;
+        font-weight: 700;
+        white-space: nowrap;
+    }}
+    </style>
+    """
 
 
 def _page_config_kwargs() -> dict:
@@ -768,22 +655,27 @@ def _page_config_kwargs() -> dict:
 
 def _nav_css(current_nav_id: str) -> str:
     """Highlights the currently-selected sidebar nav button: lighter navy
-    background + 3px teal left bar. Uses the .st-key-<key> hook Streamlit
+    background + an inset teal left bar (box-shadow, not a real border --
+    avoids a layout shift versus the unselected buttons' own 0-border
+    sizing in ui_components.AAE_CSS). Uses the .st-key-<key> hook Streamlit
     documents for exactly this (same mechanism as Approve/Reject's colors
-    above) -- current_nav_id is read from st.session_state before this is
-    injected, so it's always correct for the render about to happen."""
+    in AAE_CSS) -- current_nav_id is read from st.session_state before
+    this is injected, so it's always correct for the render about to
+    happen."""
     return f"""
     <style>
     .st-key-nav_{current_nav_id} button {{
         background-color: #1D3150 !important;
-        border-left: 3px solid #2DD4BF !important;
+        color: #FFFFFF !important;
+        box-shadow: inset 3px 0 0 #2DD4BF !important;
     }}
     </style>
     """
 
 
 def _inject_css(current_nav_id: str) -> None:
-    st.markdown(_BASE_CSS, unsafe_allow_html=True)
+    st.markdown(ui_components.AAE_CSS, unsafe_allow_html=True)
+    st.markdown(_title_css(APP_TITLE), unsafe_allow_html=True)
     st.markdown(_nav_css(current_nav_id), unsafe_allow_html=True)
 
 
@@ -802,9 +694,9 @@ def _render_top_bar_chips(data: dict) -> None:
         state_chip = "no run"
     host_chip = f"Decider · {data['host_label']}"
     spans = "".join(
-        f'<span class="aite-chip">{html.escape(text)}</span>' for text in (run_chip, state_chip, host_chip)
+        f'<span class="aae-chip">{html.escape(text)}</span>' for text in (run_chip, state_chip, host_chip)
     )
-    st.markdown(f'<div class="aite-status-chips">{spans}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="aae-status-chips">{spans}</div>', unsafe_allow_html=True)
 
 
 def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
@@ -824,7 +716,11 @@ def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
 
         st.divider()
         if st.button(
-            "Refresh status", type="secondary", icon=":material/refresh:", width="stretch"
+            "Refresh status",
+            type="secondary",
+            icon=":material/refresh:",
+            width="stretch",
+            key="refresh_status_btn",
         ):
             st.rerun()
         if state.last_error:
@@ -847,7 +743,7 @@ def _render_page_header(title: str) -> None:
     st.caption("Payment Retry & Duplicate Charge Prevention")
 
 
-_ACTION_ANCHOR_ID = "aite-action-anchor"
+_ACTION_ANCHOR_ID = "aae-action-anchor"
 
 _ACTION_VERB = {
     "decision": "confirm the Decider decision",
@@ -891,12 +787,12 @@ def _render_action_banner(data: dict, current_section_id: str) -> None:
 
 def _card_heading(text: str, *, prefix: str = "") -> None:
     """A section heading inside a bordered card, styled via the
-    .aite-card-heading CSS class rather than plain "**bold**" markdown --
+    .aae-card-heading CSS class rather than plain "**bold**" markdown --
     several pages also use inline bold field labels (e.g. "**Checkpoint:**")
     at body-text size, so a card heading needs its own distinct class to be
     sized independently without a blanket rule touching those too."""
     prefix_html = f"{html.escape(prefix)} " if prefix else ""
-    st.markdown(f'<p class="aite-card-heading">{prefix_html}{html.escape(text)}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="aae-card-heading">{prefix_html}{html.escape(text)}</p>', unsafe_allow_html=True)
 
 
 def _render_decision_trace_rows(rows: list[dict]) -> None:
