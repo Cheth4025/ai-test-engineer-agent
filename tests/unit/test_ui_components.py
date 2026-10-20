@@ -17,9 +17,12 @@ import pytest
 from ai_test_engineer import ui_components as uc
 
 UNSAFE_TEXT = '<script>alert("x")</script> & "quotes" \'single\''
-ESCAPED_UNSAFE_TEXT = (
-    "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &quot;quotes&quot; &#x27;single&#x27;"
-)
+# Leaf helpers escape with html.escape(text, quote=False): &/</> are
+# required escapes for HTML element CONTENT; quotes are only special
+# inside an attribute VALUE, which none of these parameters are placed
+# into -- escaping them anyway would mangle ordinary English apostrophes
+# (e.g. "see 'Execution'.") into visible &#x27; entities on screen.
+ESCAPED_UNSAFE_TEXT = """&lt;script&gt;alert("x")&lt;/script&gt; &amp; "quotes" 'single'"""
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +169,17 @@ def test_banner_handles_missing_sub():
 def test_banner_escapes_text():
     result = uc.banner(UNSAFE_TEXT, UNSAFE_TEXT, variant="workflow-ok")
     assert result.count(ESCAPED_UNSAFE_TEXT) == 2
+
+
+def test_banner_action_html_is_not_escaped():
+    link = '<a href="#aae-action-anchor">Jump to it</a>'
+    result = uc.banner("Action needed below", None, variant="action-needed", action_html=link)
+    assert link in result
+
+
+def test_banner_without_action_html_has_no_action_span():
+    result = uc.banner("Title", None, variant="action-needed")
+    assert "aae-banner-action" not in result
 
 
 def test_verdict_ok_true_uses_ok_variant():

@@ -684,7 +684,8 @@ def _render_top_bar_chips(data: dict) -> None:
     state · stage, Decider host. Real Streamlit-rendered HTML (not JS),
     position:fixed so it visually layers onto the header bar, re-rendered
     fresh every fragment tick with current values. Every run-derived value
-    is html.escape()'d before going into this unsafe_allow_html block."""
+    is ui_components.escape()'d before going into this unsafe_allow_html
+    block."""
     controller: RunController | None = data["controller"]
     if controller is not None:
         run_chip = f"run {controller.run_id}"
@@ -694,7 +695,7 @@ def _render_top_bar_chips(data: dict) -> None:
         state_chip = "no run"
     host_chip = f"Decider · {data['host_label']}"
     spans = "".join(
-        f'<span class="aae-chip">{html.escape(text)}</span>' for text in (run_chip, state_chip, host_chip)
+        f'<span class="aae-chip">{ui_components.escape(text)}</span>' for text in (run_chip, state_chip, host_chip)
     )
     st.markdown(f'<div class="aae-status-chips">{spans}</div>', unsafe_allow_html=True)
 
@@ -776,13 +777,25 @@ def _render_action_banner(data: dict, current_section_id: str) -> None:
         return
     verb = _ACTION_VERB[action["kind"]]
     if action["section_id"] == current_section_id:
-        st.warning(f"Action needed below: {verb}. [Jump to it](#{_ACTION_ANCHOR_ID})")
+        jump_link = f'<a href="#{_ACTION_ANCHOR_ID}">Jump to it</a>'
+        st.markdown(
+            ui_components.banner(
+                f"Action needed below: {verb}.", None, variant="action-needed", action_html=jump_link
+            ),
+            unsafe_allow_html=True,
+        )
         return
     label = NAV_LABELS[action["section_id"]]
-    st.warning(f"Action needed: {verb} — see '{label}'.")
-    if st.button(f"Go to {label}", key="jump_to_action_page"):
-        st.session_state["nav_id"] = action["section_id"]
-        st.rerun()
+    banner_col, button_col = st.columns([5, 1], vertical_alignment="center")
+    with banner_col:
+        st.markdown(
+            ui_components.banner(f"Action needed: {verb} — see '{label}'.", None, variant="action-needed"),
+            unsafe_allow_html=True,
+        )
+    with button_col:
+        if st.button(f"Go to {label}", key="jump_to_action_page"):
+            st.session_state["nav_id"] = action["section_id"]
+            st.rerun()
 
 
 def _card_heading(text: str, *, prefix: str = "") -> None:
@@ -791,8 +804,8 @@ def _card_heading(text: str, *, prefix: str = "") -> None:
     several pages also use inline bold field labels (e.g. "**Checkpoint:**")
     at body-text size, so a card heading needs its own distinct class to be
     sized independently without a blanket rule touching those too."""
-    prefix_html = f"{html.escape(prefix)} " if prefix else ""
-    st.markdown(f'<p class="aae-card-heading">{prefix_html}{html.escape(text)}</p>', unsafe_allow_html=True)
+    prefix_html = f"{ui_components.escape(prefix)} " if prefix else ""
+    st.markdown(f'<p class="aae-card-heading">{prefix_html}{ui_components.escape(text)}</p>', unsafe_allow_html=True)
 
 
 def _render_decision_trace_rows(rows: list[dict]) -> None:
@@ -926,27 +939,31 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
             st.rerun()
 
     col1, col2 = st.columns(2)
-    with col1, st.container(border=True):
-        _card_heading("The use case")
-        st.markdown(f"**PROBLEM**  \n{_USE_CASE_PROBLEM}")
-        st.markdown(f"**IMPACT**  \n{_USE_CASE_IMPACT}")
-        st.markdown(f"**MITIGATION**  \n{_USE_CASE_MITIGATION}")
-    with col2, st.container(border=True):
-        _card_heading("Business rules (BR01 – BR06)")
+    with col1:
+        use_case_body = (
+            ui_components.labeled_section("aae-label-problem", "PROBLEM", _USE_CASE_PROBLEM)
+            + ui_components.labeled_section("aae-label-impact", "IMPACT", _USE_CASE_IMPACT)
+            + ui_components.labeled_section("aae-label-mitigation", "MITIGATION", _USE_CASE_MITIGATION)
+        )
+        st.markdown(ui_components.card("The use case", use_case_body), unsafe_allow_html=True)
+    with col2:
         requirement = data["requirement"] or {}
         rules = parse_business_rules(requirement.get("text"))
-        st.table([{"ID": r["rule_id"], "Rule": r["label"], "Description": r["description"]} for r in rules])
-        st.caption("Loaded from the requirements catalog.")
+        br_rows = [
+            [ui_components.escape(r["rule_id"]), ui_components.escape(r["label"]), ui_components.escape(r["description"])] for r in rules
+        ]
+        br_body = ui_components.table(["ID", "Rule", "Description"], br_rows) + ui_components.small_caption(
+            "Loaded from the requirements catalog — wording follows the source file."
+        )
+        st.markdown(ui_components.card("Business rules (BR01 – BR06)", br_body), unsafe_allow_html=True)
 
     col3, col4 = st.columns(2)
-    with col3, st.container(border=True):
-        _card_heading("Key acceptance criteria")
-        for item in _ACCEPTANCE_CRITERIA:
-            st.markdown(f"- {item}")
-    with col4, st.container(border=True):
-        _card_heading("What the agent does")
-        for index, step in enumerate(_AGENT_STEPS, start=1):
-            st.markdown(f"{index}. {step}")
+    with col3:
+        criteria_body = "<ul>" + "".join(f"<li>{ui_components.escape(item)}</li>" for item in _ACCEPTANCE_CRITERIA) + "</ul>"
+        st.markdown(ui_components.card("Key acceptance criteria", criteria_body), unsafe_allow_html=True)
+    with col4:
+        steps_body = "<ol>" + "".join(f"<li>{ui_components.escape(step)}</li>" for step in _AGENT_STEPS) + "</ol>"
+        st.markdown(ui_components.card("What the agent does", steps_body), unsafe_allow_html=True)
 
     if controller is not None and controller.stage == "AWAITING_CLARIFICATION":
         st.warning("Run is paused awaiting clarification on a critical ambiguity.")
@@ -996,7 +1013,7 @@ def _render_coverage_donut(coverage: dict, caption: str) -> None:
             theta="count:Q",
             color=alt.Color(
                 "category:N",
-                scale=alt.Scale(domain=["Covered", "Missing"], range=["#0D9488", "#FCA5A5"]),
+                scale=alt.Scale(domain=["Covered", "Missing"], range=["#0D9488", "#F4C7C3"]),
                 legend=None,
             ),
             tooltip=alt.Tooltip("label:N", title=None),
@@ -1010,28 +1027,55 @@ def _render_coverage_donut(coverage: dict, caption: str) -> None:
     # 200x200 around an outerRadius=85 (170px diameter) ring -- 15px
     # clearance on every side so the ring is never clipped at the edge.
     st.altair_chart(alt.layer(arc, center_text).properties(width=200, height=200))
-    st.caption(f"{caption} · {covered} of {required}")
+    st.markdown(ui_components.small_caption(f"{caption} · {covered} of {required}"), unsafe_allow_html=True)
+
+
+# Maps the real grounding verdict/human_resolution literals (docs/05
+# Section: GROUNDED/NOT_GROUNDED/NEEDS_REVIEW, CONFIRMED_GROUNDED/
+# CONFIRMED_NOT_GROUNDED -- internal names, unchanged) to the short
+# "Rule match" pill label+variant shown in the Scenarios table. Pulled
+# forward from the wording-map commit (plan section C6-8): a pill styled
+# in Commit B with the OLD raw literal as its text would be an unreadable
+# badge, so the two land together for this one column.
+_RULE_MATCH_PILL = {
+    "CONFIRMED_GROUNDED": ("Matches", "matches"),
+    "GROUNDED": ("Matches", "matches"),
+    "CONFIRMED_NOT_GROUNDED": ("No match", "no-match"),
+    "NOT_GROUNDED": ("No match", "no-match"),
+    "NEEDS_REVIEW": ("Needs review", "waiting"),
+}
 
 
 def _render_scenarios_table(scenarios: list[dict], grounding_items: dict, added_ids: set[str]) -> None:
     rows = []
+    row_classes = []
     for scenario in scenarios:
-        grounding_item = grounding_items.get(scenario["scenario_id"])
-        status = "—"
+        scenario_id = scenario["scenario_id"]
+        grounding_item = grounding_items.get(scenario_id)
+        raw_status = None
         if grounding_item is not None:
-            status = grounding_item.get("human_resolution") or grounding_item.get("verdict") or "—"
-        scenario_label = scenario["title"]
-        if scenario["scenario_id"] in added_ids:
-            scenario_label += "  —  Added by remediation"
+            raw_status = grounding_item.get("human_resolution") or grounding_item.get("verdict")
+
+        if scenario_id in added_ids:
+            rule_match_cell = ui_components.pill("Added by remediation", "added-remediation")
+        elif raw_status in _RULE_MATCH_PILL:
+            rule_match_cell = ui_components.pill(*_RULE_MATCH_PILL[raw_status])
+        else:
+            rule_match_cell = "—"
+
         rows.append(
-            {
-                "ID": scenario["scenario_id"],
-                "Scenario": scenario_label,
-                "Rules": ", ".join(scenario.get("rule_ids", [])),
-                "Status": status,
-            }
+            [
+                ui_components.escape(scenario_id),
+                ui_components.escape(scenario["title"]),
+                ui_components.escape(", ".join(scenario.get("rule_ids", []))),
+                rule_match_cell,
+            ]
         )
-    st.table(rows)
+        row_classes.append("aae-row--added" if scenario_id in added_ids else "")
+    st.markdown(
+        ui_components.table(["ID", "Scenario", "Rules", "Rule match"], rows, row_classes=row_classes),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_page_scenarios(state: UIState, data: dict) -> None:
@@ -1048,7 +1092,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
 
     col_left, col_right = st.columns(2)
 
-    with col_left, st.container(border=True):
+    with col_left, ui_components.widget_card_container("generated-scenarios"):
         _card_heading("Generated scenarios")
         version_ids = [entry["version"] for entry in versions_list]
         selected_version = st.segmented_control(
@@ -1071,9 +1115,10 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
 
         _render_scenarios_table(scenarios, grounding_items, added_ids)
         if selected_version == 1:
-            st.caption("From scenarios_v1.json. S04 is deliberately omitted from this pass (seeded omission).")
+            caption_text = "From scenarios_v1.json. S04 is deliberately omitted from this pass (seeded omission)."
         else:
-            st.caption(f"From scenarios_v{selected_version}.json.")
+            caption_text = f"From scenarios_v{selected_version}.json."
+        st.markdown(ui_components.small_caption(caption_text), unsafe_allow_html=True)
 
         if selected_version == latest_version:
             current_action = pending_action(controller, versions_list)
@@ -1105,7 +1150,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                                 controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
                             st.rerun()
 
-    with col_right, st.container(border=True):
+    with col_right, ui_components.widget_card_container("coverage"):
         _card_heading("Coverage")
         donut_entries = [entry for entry in versions_list if entry["effective_coverage"] is not None]
         if len(donut_entries) >= 2:
@@ -1143,26 +1188,36 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
     if gap_entry is not None or coverage_rows:
         gap_col, decider_col = st.columns(2)
         if gap_entry is not None:
-            with gap_col, st.container(border=True):
-                _card_heading("Gap found by coverage check", prefix="⚠️")
+            with gap_col:
                 coverage = gap_entry["effective_coverage"]
                 catalog = (_load_json(CONFIG_DIR / "scenario_catalog.json") or {}).get("scenarios", {})
+                gap_lines = []
                 for row in coverage["rows"]:
                     if row["status"] == "VALID":
                         continue
                     title = catalog.get(row["scenario_id"], {}).get("title", "—")
-                    st.markdown(f"**Missing:** {row['scenario_id']} — {title}")
-                    st.markdown(f"**Uncovered rule:** {', '.join(row['rule_ids'])}")
+                    gap_lines.append(f"<p><strong>Missing:</strong> {ui_components.escape(row['scenario_id'])} — {ui_components.escape(title)}</p>")
+                    gap_lines.append(
+                        f"<p><strong>Uncovered rule:</strong> {ui_components.escape(', '.join(row['rule_ids']))}</p>"
+                    )
+                gap_lines.append(
+                    f"<p><strong>Coverage:</strong> {coverage['covered']}/{coverage['required']} — "
+                    "below the 5/5 acceptance guard</p>"
+                )
                 st.markdown(
-                    f"**Coverage:** {coverage['covered']}/{coverage['required']} — "
-                    "below the 5/5 acceptance guard"
+                    ui_components.card("⚠️ Gap found by coverage check", "".join(gap_lines), tone="gap"),
+                    unsafe_allow_html=True,
                 )
         if coverage_rows:
-            with decider_col, st.container(border=True):
+            # _render_decision_trace_rows (and this card's wrapper/tone)
+            # are deferred to Commit C5, which replaces it with
+            # decision_trace_table() once decision_trace.py's "outcome"
+            # field exists -- see the polish-1 ledger.
+            with decider_col, ui_components.widget_card_container("coverage-decider-trace"):
                 _card_heading("Strands Decider (2B) decision")
                 _render_decision_trace_rows(coverage_rows)
 
-    with st.container(border=True):
+    with ui_components.widget_card_container("gherkin"):
         _card_heading("Gherkin")
         if scenarios:
             tabs = st.tabs([f"{s['scenario_id']} · {s['title']}" for s in scenarios])
@@ -1170,9 +1225,10 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                 with tab:
                     gherkin = scenario.get("gherkin")
                     if gherkin:
-                        st.code(gherkin, language="gherkin")
+                        block = ui_components.code_block(ui_components.gherkin_highlight(gherkin), language="gherkin")
                     else:
-                        st.code("(no gherkin available)", language="text")
+                        block = ui_components.code_block(ui_components.escape("(no gherkin available)"))
+                    st.markdown(block, unsafe_allow_html=True)
 
     if (
         controller.stage == "AWAITING_DECISION_CONFIRMATION"
@@ -1195,8 +1251,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
 
     col1, col2 = st.columns(2)
 
-    with col1, st.container(border=True):
-        _card_heading("Test manifest (fixed)")
+    with col1:
         manifest = (_load_json(CONFIG_DIR / "test_manifest.json") or {}).get("tests", [])
         catalog = (_load_json(CONFIG_DIR / "scenario_catalog.json") or {}).get("scenarios", {})
         per_scenario_assertions = {
@@ -1211,28 +1266,36 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             specific = remainder.get(scenario_id, [])
             expected = "; ".join(format_assertion(a) for a in specific) if specific else "shared checks only"
             rows.append(
-                {
-                    "ID": test["test_id"],
-                    "Scenario": title,
-                    "Expected": expected,
-                    "Rules": ", ".join(test.get("rule_ids", [])),
-                }
+                [
+                    ui_components.escape(test["test_id"]),
+                    ui_components.escape(title),
+                    ui_components.escape(expected),
+                    ui_components.escape(", ".join(test.get("rule_ids", []))),
+                ]
             )
-        st.table(rows)
+        manifest_body = ui_components.table(["ID", "Scenario", "Expected", "Rules"], rows)
         if shared:
-            st.caption("All tests also check: " + ", ".join(format_assertion(a) for a in shared) + ".")
+            manifest_body += ui_components.small_caption(
+                "All tests also check: " + ", ".join(format_assertion(a) for a in shared) + "."
+            )
+        st.markdown(ui_components.card("Test manifest (fixed)", manifest_body), unsafe_allow_html=True)
 
-    with col2, st.container(border=True):
+    with col2, ui_components.widget_card_container("human-approval"):
         _card_heading("Human approval")
         approval = _load_json(controller.run_dir / "approval.json") if controller is not None else None
 
         if approval is not None:
             decision_label = "Approved" if approval["decision"] == "APPROVE" else "Rejected"
-            (st.success if approval["decision"] == "APPROVE" else st.error)(
-                f"{decision_label} by {approval['reviewer']} at {approval['timestamp']}"
+            st.markdown(
+                ui_components.verdict(
+                    f"{decision_label} by {approval['reviewer']} at {approval['timestamp']}",
+                    None,
+                    ok=approval["decision"] == "APPROVE",
+                ),
+                unsafe_allow_html=True,
             )
             if approval.get("comment"):
-                st.caption(f"Comment: {approval['comment']}")
+                st.markdown(ui_components.small_caption(f"Comment: {approval['comment']}"), unsafe_allow_html=True)
             execute_ready = can_execute(state, controller)
             if execute_ready:
                 _render_action_anchor()
@@ -1250,11 +1313,12 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                     disabled=not execute_ready,
                 )
             if controller is not None and controller.execution_started:
-                st.caption(f"Execution status: {controller.workflow_state}.")
+                caption_text = f"Execution status: {controller.workflow_state}."
             elif execute_ready:
-                st.caption("Ready to run the five fixed tests.")
+                caption_text = "Ready to run the five fixed tests."
             else:
-                st.caption("Execute unlocks once the run reaches APPROVED.")
+                caption_text = "Execute unlocks once the run reaches APPROVED."
+            st.markdown(ui_components.small_caption(caption_text), unsafe_allow_html=True)
             if execute_clicked:
                 execute_run(state)
                 st.rerun()
@@ -1277,14 +1341,24 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                 blockers = controller.approval_blockers(latest_version) if latest_version is not None else []
 
             if not blockers:
-                st.success("Ready for approval — coverage 5/5, no open grounding flags.")
+                st.markdown(
+                    ui_components.banner(
+                        "Ready for approval — coverage 5/5, no open grounding flags.", None, variant="workflow-ok"
+                    ),
+                    unsafe_allow_html=True,
+                )
             else:
                 for blocker in blockers:
-                    st.warning(blocker)
+                    st.markdown(
+                        ui_components.banner(blocker, None, variant="action-needed"), unsafe_allow_html=True
+                    )
 
             reviewer = st.text_input("Reviewer name", key="reviewer_name", disabled=not execution_unlocked)
             comment = st.text_input("Comment (optional)", key="approval_comment", disabled=not execution_unlocked)
-            st.caption("Approval time is stamped automatically and saved to approval.json.")
+            st.markdown(
+                ui_components.small_caption("Approval time is stamped automatically and saved to approval.json."),
+                unsafe_allow_html=True,
+            )
 
             approve_ready = can_approve(state, controller, reviewer, latest_version)
             reject_ready = can_reject(state, controller, reviewer)
@@ -1306,7 +1380,10 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                 )
             with button_cols[2]:
                 st.button("Execute", type="primary", key="execute_btn", icon=":material/lock:", disabled=True)
-            st.caption("Execute unlocks once the run reaches APPROVED.")
+            st.markdown(
+                ui_components.small_caption("Execute unlocks once the run reaches APPROVED."),
+                unsafe_allow_html=True,
+            )
 
             if reject_clicked and controller is not None and latest_version is not None:
                 with state.lock:
@@ -1326,23 +1403,31 @@ def _render_page_execution(state: UIState, data: dict) -> None:
 
     results = data.get("results")
     run_col, log_col = st.columns(2)
-    with run_col, st.container(border=True):
-        _card_heading("Test run")
+    with run_col:
         if results is None:
-            st.info("Results appear here after execution.")
+            body = "<p>Results appear here after execution.</p>"
         else:
             tests = results["tests"]
             passed = sum(1 for t in tests if t["status"] == "PASS")
             duration_s = round(results["duration_ms"] / 1000, 1)
-            st.caption(f"{passed}/{len(tests)} completed · {duration_s}s")
-            st.table([{"ID": t["test_id"], "Scenario": t["scenario_id"], "Result": t["status"]} for t in tests])
-    with log_col, st.container(border=True):
-        _card_heading("Execution log")
+            rows = [
+                [ui_components.escape(t["test_id"]), ui_components.escape(t["scenario_id"]), ui_components.pill(t["status"], t["status"].lower())]
+                for t in tests
+            ]
+            row_classes = ["aae-row--fail" if t["status"] == "FAIL" else "" for t in tests]
+            body = ui_components.small_caption(
+                f"{passed}/{len(tests)} completed · {duration_s}s"
+            ) + ui_components.table(["ID", "Scenario", "Result"], rows, row_classes=row_classes)
+        st.markdown(ui_components.card("Test run", body), unsafe_allow_html=True)
+    with log_col:
         log_path = controller.run_dir / "execution" / "pytest_output.log" if controller is not None else None
         if log_path is not None and log_path.exists():
-            st.code(log_path.read_text(encoding="utf-8", errors="replace"), language="text")
+            log_body = ui_components.code_block(
+                ui_components.log_highlight(log_path.read_text(encoding="utf-8", errors="replace"))
+            )
         else:
-            st.info("Real pytest output appears here after execution.")
+            log_body = "<p>Real pytest output appears here after execution.</p>"
+        st.markdown(ui_components.card("Execution log", log_body), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1366,9 +1451,17 @@ def _render_page_results(state: UIState, data: dict) -> None:
 
     banner_cols = st.columns(2)
     with banner_cols[0]:
-        (st.success if workflow_status == "COMPLETED" else st.error)(f"Agent workflow: {workflow_status}")
+        st.markdown(
+            ui_components.verdict(f"Agent workflow: {workflow_status}", None, ok=workflow_status == "COMPLETED"),
+            unsafe_allow_html=True,
+        )
     with banner_cols[1]:
-        (st.success if verification_status == "PASSED" else st.error)(f"Payment verification: {verification_status}")
+        st.markdown(
+            ui_components.verdict(
+                f"Payment verification: {verification_status}", None, ok=verification_status == "PASSED"
+            ),
+            unsafe_allow_html=True,
+        )
 
     total = len(tests)
     passed = sum(1 for t in tests if t["status"] == "PASS")
@@ -1377,53 +1470,66 @@ def _render_page_results(state: UIState, data: dict) -> None:
     coverage_text = f"{coverage['covered']}/{coverage['required']}" if coverage else "—"
     duration_s = round(results["duration_ms"] / 1000, 1)
 
-    tiles = st.columns(5)
-    tiles[0].metric("Total tests", total)
-    tiles[1].metric("Passed", passed)
-    tiles[2].metric("Failed", failed)
-    tiles[3].metric("Coverage", coverage_text)
-    tiles[4].metric("Duration", f"{duration_s}s")
-
-    with st.container(border=True):
-        _card_heading("Test results")
-        st.table(
+    st.markdown(
+        ui_components.kpi_row(
             [
-                {
-                    "ID": t["test_id"],
-                    "Scenario": t["scenario_id"],
-                    "Expected": t["expected"],
-                    "Actual": t["actual"],
-                    "Status": t["status"],
-                }
-                for t in tests
+                {"label": "Total tests", "value": str(total), "tone": "default"},
+                {"label": "Passed", "value": str(passed), "tone": "passed"},
+                {"label": "Failed", "value": str(failed), "tone": "failed"},
+                {"label": "Coverage", "value": coverage_text, "tone": "default"},
+                {"label": "Duration", "value": f"{duration_s}s", "tone": "default"},
             ]
-        )
-        st.caption("Actual values are recorded by each test, never copied from Expected.")
+        ),
+        unsafe_allow_html=True,
+    )
+
+    results_rows = [
+        [
+            ui_components.escape(t["test_id"]),
+            ui_components.escape(t["scenario_id"]),
+            ui_components.escape(t["expected"]),
+            ui_components.escape(t["actual"]),
+            ui_components.pill(t["status"], t["status"].lower()),
+        ]
+        for t in tests
+    ]
+    results_row_classes = ["aae-row--fail" if t["status"] == "FAIL" else "" for t in tests]
+    results_body = ui_components.table(
+        ["ID", "Scenario", "Expected", "Actual", "Status"], results_rows, row_classes=results_row_classes
+    ) + ui_components.small_caption("Actual values are recorded by each test, never copied from Expected.")
+    st.markdown(ui_components.card("Test results", results_body), unsafe_allow_html=True)
 
     analysis = data.get("analysis")
     has_failure = bool(analysis and analysis.get("has_failure"))
     failure_col, decider_col = st.columns(2)
-    with failure_col, st.container(border=True):
-        _card_heading(f"Failure — {analysis['test_id']}" if has_failure else "Failure")
+    with failure_col:
+        heading = f"Failure — {analysis['test_id']}" if has_failure else "Failure"
         if has_failure:
-            st.markdown(f"**What happened:** {analysis['actual_behavior']}")
-            st.markdown(f"**Rule violated:** {analysis['expected_behavior']}")
-            st.markdown("**Impact:**")
-            for item in analysis.get("impact", []):
-                st.markdown(f"- {item}")
-            st.markdown("**Next step:** Developer fix. The agent reports defects; it does not change code.")
+            failure_lines = [
+                f"<p><strong>What happened:</strong> {ui_components.escape(analysis['actual_behavior'])}</p>",
+                f'<div class="aae-rule-quote"><strong>Rule violated:</strong> {ui_components.escape(analysis["expected_behavior"])}</div>',
+                "<p><strong>Impact:</strong></p>",
+                "<ul>" + "".join(f"<li>{ui_components.escape(item)}</li>" for item in analysis.get("impact", [])) + "</ul>",
+                "<p><strong>Next step:</strong> Developer fix. The agent reports defects; it does not change code.</p>",
+            ]
+            failure_body = "".join(failure_lines)
         else:
-            st.success("No failure observed.")
+            failure_body = "<p>No failure observed.</p>"
+        st.markdown(ui_components.card(heading, failure_body, tone="failure"), unsafe_allow_html=True)
 
-    with decider_col, st.container(border=True):
+    with decider_col, ui_components.widget_card_container("results-decider-trace"):
+        # _render_decision_trace_rows (and this card's wrapper/tone) are
+        # deferred to Commit C5, which replaces it with
+        # decision_trace_table() once decision_trace.py's "outcome" field
+        # exists -- see the polish-1 ledger.
         _card_heading("Decider decision trace")
         trace_rows = build_decision_trace(data.get("decisions") or [], _decider_cfg())
         if not trace_rows:
-            st.caption("No decisions recorded.")
+            st.markdown(ui_components.small_caption("No decisions recorded."), unsafe_allow_html=True)
         _render_decision_trace_rows(trace_rows)
 
     if has_failure:
-        with st.container(border=True):
+        with ui_components.widget_card_container("evidence"):
             _card_heading(f"Evidence — {analysis['test_id']}")
             failed_test = next((t for t in tests if t["test_id"] == analysis["test_id"]), None)
             evidence_reference = failed_test.get("evidence_reference") if failed_test else None
@@ -1432,14 +1538,27 @@ def _render_page_results(state: UIState, data: dict) -> None:
             tabs = st.tabs(["Callbacks", "Ledger entries", "Test log"])
             with tabs[0]:
                 callbacks = [e for e in evidence.get("events", []) if e.get("action") == "callback_delivered"]
-                st.code(json.dumps(callbacks, indent=2), language="json")
+                st.markdown(
+                    ui_components.code_block(ui_components.escape(json.dumps(callbacks, indent=2)), language="json"),
+                    unsafe_allow_html=True,
+                )
             with tabs[1]:
-                st.code(json.dumps(evidence.get("ledger", []), indent=2), language="json")
+                st.markdown(
+                    ui_components.code_block(
+                        ui_components.escape(json.dumps(evidence.get("ledger", []), indent=2)), language="json"
+                    ),
+                    unsafe_allow_html=True,
+                )
             with tabs[2]:
                 log_path = controller.run_dir / results.get("log_reference", "")
                 log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else "(no log captured)"
-                st.code(log_text, language="text")
-            st.caption("Real JSON is whatever the test wrote to the run's evidence folder.")
+                st.markdown(
+                    ui_components.code_block(ui_components.log_highlight(log_text)), unsafe_allow_html=True
+                )
+            st.markdown(
+                ui_components.small_caption("Real JSON is whatever the test wrote to the run's evidence folder."),
+                unsafe_allow_html=True,
+            )
 
     report_path = controller.run_dir / "report.md"
     download_cols = st.columns(2)

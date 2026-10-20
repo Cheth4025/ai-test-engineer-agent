@@ -60,11 +60,27 @@ _CONF_TEAL = "#0D9488"
 _CONF_AMBER = "#F59E0B"
 
 
+def escape(text: str) -> str:
+    """The one escaping function every leaf helper uses for element
+    CONTENT (text between tags, never an attribute value): html.escape(...,
+    quote=False). Only &/</> are structurally required escapes inside HTML
+    text content -- quote=True (the stdlib default) additionally rewrites
+    " and ' to &quot;/&#x27;, which is only needed inside a quoted
+    attribute value. None of this module's leaf parameters are placed into
+    an attribute, so the default would visibly mangle ordinary English
+    text like "see 'Execution'." into "see &#x27;Execution&#x27;." on
+    screen for no safety benefit. The few genuine attribute-value cases
+    (table()'s row_class, labeled_section()'s label_class -- both always
+    internal CSS class literals, never user/model text) call html.escape()
+    directly with its quote=True default instead of this function."""
+    return html.escape(text, quote=False)
+
+
 def pill(text: str, variant: str) -> str:
     """Leaf helper: text is raw/plain and escaped internally."""
     if variant not in PILL_VARIANTS:
         raise ValueError(f"unknown pill variant {variant!r}")
-    return f'<span class="aae-pill aae-pill--{variant}">{html.escape(text)}</span>'
+    return f'<span class="aae-pill aae-pill--{variant}">{escape(text)}</span>'
 
 
 def card(heading: str, body_html: str, *, tone: str = "default") -> str:
@@ -75,7 +91,7 @@ def card(heading: str, body_html: str, *, tone: str = "default") -> str:
     tone_class = f" aae-card--{tone}" if tone != "default" else ""
     return (
         f'<div class="aae-card{tone_class}">'
-        f'<p class="aae-card-heading">{html.escape(heading)}</p>'
+        f'<p class="aae-card-heading">{escape(heading)}</p>'
         f'<div class="aae-card-body">{body_html}</div>'
         f"</div>"
     )
@@ -90,7 +106,7 @@ def table(headers: list[str], rows: list[list[str]], *, row_classes: list[str] |
         raise ValueError(f"row_classes length {len(row_classes)} != rows length {len(rows)}")
     classes = row_classes if row_classes is not None else [""] * len(rows)
 
-    thead = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    thead = "".join(f"<th>{escape(h)}</th>" for h in headers)
     body_rows = []
     for row, row_class in zip(rows, classes):
         class_attr = f' class="{html.escape(row_class)}"' if row_class else ""
@@ -114,28 +130,36 @@ def kpi_row(tiles: list[dict]) -> str:
         value_class = f" aae-kpi-value--{tone}" if tone != "default" else ""
         cells.append(
             '<div class="aae-kpi-tile">'
-            f'<p class="aae-kpi-label">{html.escape(tile["label"])}</p>'
-            f'<p class="aae-kpi-value{value_class}">{html.escape(tile["value"])}</p>'
-            f'<p class="aae-kpi-sub">{html.escape(tile.get("sub", ""))}</p>'
+            f'<p class="aae-kpi-label">{escape(tile["label"])}</p>'
+            f'<p class="aae-kpi-value{value_class}">{escape(tile["value"])}</p>'
+            f'<p class="aae-kpi-sub">{escape(tile.get("sub", ""))}</p>'
             "</div>"
         )
     return f'<div class="aae-kpi-row">{"".join(cells)}</div>'
 
 
-def banner(title: str, sub: str | None, *, variant: str) -> str:
-    """title/sub are leaf/plain text, escaped internally."""
+def banner(title: str, sub: str | None, *, variant: str, action_html: str | None = None) -> str:
+    """title/sub are leaf/plain text, escaped internally. action_html is an
+    OPTIONAL pre-built HTML fragment (e.g. an <a href="#..."> anchor link)
+    rendered right-aligned -- NOT escaped, since it's markup the caller
+    assembled (a plain link, never a Streamlit widget: a widget needing a
+    rerun, like a page-switching button, stays a real st.button laid out
+    beside the banner via st.columns instead)."""
     if variant not in _BANNER_VARIANTS:
         raise ValueError(f"unknown banner variant {variant!r}")
-    sub_html = f'<p class="aae-banner-sub">{html.escape(sub)}</p>' if sub else ""
+    sub_html = f'<p class="aae-banner-sub">{escape(sub)}</p>' if sub else ""
+    action = f'<span class="aae-banner-action">{action_html}</span>' if action_html else ""
     return (
         f'<div class="aae-banner aae-banner--{variant}">'
-        f'<p class="aae-banner-title">{html.escape(title)}</p>'
+        f'<div class="aae-banner-row"><div>'
+        f'<p class="aae-banner-title">{escape(title)}</p>'
         f"{sub_html}"
+        f"</div>{action}</div>"
         "</div>"
     )
 
 
-def verdict(title: str, sub: str, *, ok: bool) -> str:
+def verdict(title: str, sub: str | None, *, ok: bool) -> str:
     """Thin wrapper over banner() for the two Results-page verdict banners."""
     return banner(title, sub, variant="workflow-ok" if ok else "verification-fail")
 
@@ -168,11 +192,11 @@ def progress(steps: list[dict]) -> str:
         if index < total - 1:
             filled = " aae-progress-connector--filled" if state in ("done", "current") else ""
             connector = f'<span class="aae-progress-connector{filled}"></span>'
-        sub_html = f'<p class="aae-progress-sub">{html.escape(step.get("sub", ""))}</p>' if step.get("sub") else ""
+        sub_html = f'<p class="aae-progress-sub">{escape(step.get("sub", ""))}</p>' if step.get("sub") else ""
         dots.append(
             '<span class="aae-progress-step">'
             f'<span class="aae-progress-dot aae-progress-dot--{state}">{index + 1}</span>'
-            f'<p class="aae-progress-label">{html.escape(step["label"])}</p>'
+            f'<p class="aae-progress-label">{escape(step["label"])}</p>'
             f"{sub_html}"
             f"{connector}"
             "</span>"
@@ -197,7 +221,7 @@ def gherkin_highlight(raw_text: str) -> str:
     (after optional whitespace), so an escaped entity like &amp; can never
     be misread as a keyword, and a word merely containing a keyword as a
     substring (e.g. "Andover") is never rewritten."""
-    escaped = html.escape(raw_text)
+    escaped = escape(raw_text)
     lines = []
     for line in escaped.split("\n"):
         match = _GHERKIN_KEYWORD_RE.match(line)
@@ -215,7 +239,7 @@ _LOG_STATUS_RE = re.compile(r"\b(PASSED|FAILED)\b")
 def log_highlight(raw_text: str) -> str:
     """raw_text is RAW pytest log output -- escaped internally first, then
     PASSED/FAILED tokens are wrapped in status spans."""
-    escaped = html.escape(raw_text)
+    escaped = escape(raw_text)
 
     def _span(match: re.Match) -> str:
         word = match.group(1)
@@ -227,10 +251,14 @@ def log_highlight(raw_text: str) -> str:
 
 def labeled_section(label_class: str, label_text: str, body_text: str) -> str:
     """label_text/body_text are leaf/plain text, escaped internally --
-    Overview's PROBLEM/IMPACT/MITIGATION sections."""
+    Overview's PROBLEM/IMPACT/MITIGATION sections. label_class is a CSS
+    class literal going into an attribute value, so it uses html.escape()'s
+    quote=True default (unlike escape()) rather than escape() -- it's
+    always one of this module's own fixed class names, never dynamic text,
+    but the attribute-value context is what matters here, not the source."""
     return (
-        f'<p class="aae-label {html.escape(label_class)}">{html.escape(label_text)}</p>'
-        f'<p class="aae-label-body">{html.escape(body_text)}</p>'
+        f'<p class="aae-label {html.escape(label_class)}">{escape(label_text)}</p>'
+        f'<p class="aae-label-body">{escape(body_text)}</p>'
     )
 
 
@@ -238,7 +266,7 @@ def small_caption(text: str) -> str:
     """Leaf helper: text is raw/plain and escaped internally. 11px
     under-card caption (distinct from the page subtitle, which stays a
     plain st.caption call)."""
-    return f'<p class="aae-caption">{html.escape(text)}</p>'
+    return f'<p class="aae-caption">{escape(text)}</p>'
 
 
 def _pill_css() -> str:
@@ -351,6 +379,20 @@ AAE_CSS = f"""
     border-radius: 9px;
     padding: 18px 19px;
 }}
+/* Transitional safety net: a handful of cards (the decision-trace rows'
+   wrappers) stay native st.container(border=True) until Commit C5
+   replaces their content with decision_trace_table() -- without this,
+   they'd fall back to Streamlit's default spacious padding in the
+   meantime. No official data-testid distinguishes a bordered
+   st.container from an unbordered one in this pinned Streamlit build
+   (1.66.0); re-verify this selector by inspecting a card's computed class
+   if Streamlit is ever upgraded. Becomes dead CSS (matches nothing) once
+   every remaining st.container(border=True) display card is migrated to
+   card() -- safe to delete at that point, not required to. */
+.block-container .st-emotion-cache-1te8eqs {{
+    padding: 18px 19px !important;
+    border-radius: 9px !important;
+}}
 .aae-card-heading {{
     font-size: 15px !important;
     font-weight: 700 !important;
@@ -423,8 +465,11 @@ AAE_CSS = f"""
     border-radius: 9px;
     padding: 12px 16px;
 }}
+.aae-banner-row {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
 .aae-banner-title {{ font-size: 14px !important; font-weight: 700 !important; margin: 0 !important; }}
 .aae-banner-sub {{ font-size: 11.5px !important; margin: 2px 0 0 0 !important; }}
+.aae-banner-action {{ white-space: nowrap; flex-shrink: 0; }}
+.aae-banner-action a {{ color: inherit; font-weight: 700; text-decoration: underline; }}
 .aae-banner--workflow-ok {{ background-color: #E3F4EF; border: 1px solid #A7DCD2; color: #0B5F57; }}
 .aae-banner--verification-fail {{ background-color: #FFF1F0; border: 1px solid #F1B8B2; color: #B42318; }}
 .aae-banner--action-needed {{

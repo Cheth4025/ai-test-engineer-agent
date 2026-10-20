@@ -189,15 +189,25 @@ def test_overview_shows_use_case_copy_and_real_br_table(monkeypatch, tmp_path, u
 
     assert not at.exception
     markdown_text = " ".join(m.value for m in at.markdown)
+    # The use-case card is now rendered as one aae-card HTML block (plan
+    # section C "use st.table/.../st.info for styled sections" is replaced
+    # by ui_components.card()/labeled_section()) -- content lives inside
+    # at.markdown, not a separate widget type.
+    assert "aae-label-problem" in markdown_text
+    assert "aae-label-impact" in markdown_text
+    assert "aae-label-mitigation" in markdown_text
     # \$ (escaped) -- a bare "$100" is parsed as inline LaTeX math by
     # st.markdown (caught visually; see ui.py's _USE_CASE_PROBLEM comment).
+    # labeled_section() escapes internally -- a literal backslash does not
+    # need html-escaping, so it still appears verbatim.
     assert "A customer pays \\$100 once" in markdown_text  # PROBLEM copy
     assert "Inflated revenue" in markdown_text  # IMPACT copy
     assert "Test T04 catches the duplicate" in markdown_text  # MITIGATION copy
 
-    br_table = next(t.value for t in at.table if "ID" in list(t.value.columns))
-    assert list(br_table["ID"]) == ["BR01", "BR02", "BR03", "BR04", "BR05", "BR06"]
-    assert br_table[br_table["ID"] == "BR01"]["Rule"].iloc[0] == "Idempotency key"
+    assert "aae-table" in markdown_text
+    assert "BR01" in markdown_text and "BR06" in markdown_text
+    assert "Idempotency key" in markdown_text
+    assert "Loaded from the requirements catalog" in markdown_text
 
 
 def test_overview_shows_acceptance_criteria_and_agent_steps(monkeypatch, tmp_path, ui_script_path):
@@ -219,7 +229,9 @@ def test_approval_and_results_placeholders_before_any_run(monkeypatch, tmp_path,
     assert any("Start analysis to generate scenarios." in i.value for i in at.info)
 
     at = _navigate(at, "execution")
-    assert any("Results appear here after execution." in i.value for i in at.info)
+    # Now inside the Test run card's HTML body (ui_components.card()), not
+    # a native st.info.
+    assert any("Results appear here after execution." in m.value for m in at.markdown)
 
     at = _navigate(at, "results")
     assert any("Results appear after the tests run." in i.value for i in at.info)
@@ -336,10 +348,14 @@ def test_no_action_banner_anywhere_before_any_run(monkeypatch, tmp_path, ui_scri
 
     for nav_id in ("requirements", "scenarios", "execution", "results"):
         at = _navigate(at, nav_id)
-        assert not any("Action needed" in w.value for w in at.warning)
+        assert not any("Action needed" in m.value for m in at.markdown)
 
 
 def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeypatch, tmp_path, ui_script_path):
+    """The action banner is now an aae-banner HTML block (ui_components.
+    banner()), not a native st.warning -- the same-page link is a real
+    <a href="#aae-action-anchor"> anchor embedded in the banner; the
+    cross-page case is the banner plus a real st.button beside it."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
     monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
@@ -348,14 +364,15 @@ def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeyp
     at.run()
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("Action needed below" in w.value for w in a.warning))
+    at = _settle(at, lambda a: any("Action needed below" in m.value for m in a.markdown))
 
-    assert any("confirm the Decider decision" in w.value and "Jump to it" in w.value for w in at.warning)
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "confirm the Decider decision" in markdown_text
+    assert '<a href="#aae-action-anchor">Jump to it</a>' in markdown_text
 
     at = _navigate(at, "requirements")
-    assert any(
-        "Action needed" in w.value and "see 'Scenarios'" in w.value for w in at.warning
-    )
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Action needed" in markdown_text and "see 'Scenarios'" in markdown_text
     assert any(b.label == "Go to Scenarios" for b in at.button)
 
 
@@ -367,17 +384,15 @@ def test_action_banner_on_overview_for_awaiting_approval(monkeypatch, tmp_path, 
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "requirements")
-    at = _settle(at, lambda a: any("Action needed" in w.value for w in a.warning))
+    at = _settle(at, lambda a: any("Action needed" in m.value for m in a.markdown))
 
-    assert any(
-        "record the approval decision" in w.value and "see 'Execution'" in w.value for w in at.warning
-    )
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "record the approval decision" in markdown_text and "see 'Execution'" in markdown_text
     assert any(b.label == "Go to Execution" for b in at.button)
 
     at = _navigate(at, "execution")
-    assert any(
-        "Action needed below" in w.value and "record the approval decision" in w.value for w in at.warning
-    )
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Action needed below" in markdown_text and "record the approval decision" in markdown_text
 
 
 def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
@@ -720,12 +735,18 @@ def test_scenarios_page_shows_v2_with_s04_added_by_remediation_badge(monkeypatch
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("Scenario" in getattr(t.value, "columns", []) for t in a.table))
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
 
     assert not at.exception
-    scenarios_table = next(t.value for t in at.table if "Scenario" in getattr(t.value, "columns", []))
-    s04_row = scenarios_table[scenarios_table["ID"] == "S04"]
-    assert "Added by remediation" in s04_row["Scenario"].iloc[0]
+    # The scenario table is now one aae-table HTML block (ui_components.
+    # table()); S04's "Added by remediation" badge is its own Rule-match
+    # pill (not appended to the Scenario title text) and its row carries
+    # the aae-row--added highlight class.
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "S04" in markdown_text
+    assert "Duplicate successful callback" in markdown_text
+    assert 'aae-pill--added-remediation">Added by remediation</span>' in markdown_text
+    assert "aae-row--added" in markdown_text
     # v1 (the default-latest segmented_control value is v2, but v1's own
     # table must never show the badge for S04 -- it's not on this page's
     # default render) is covered by the diff-based helper's own unit tests;
@@ -737,7 +758,8 @@ def test_scenarios_page_shows_coverage_donuts_before_and_after(monkeypatch, tmp_
     empty via at.get("altair_chart")), so this checks the real caption each
     donut renders right after itself instead -- proves both actually
     rendered with the correct before/after coverage, not just that no
-    exception occurred."""
+    exception occurred. The caption is now an aae-caption HTML block
+    (ui_components.small_caption()) in at.markdown, not a native st.caption."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_remediated_run(tmp_path)
 
@@ -745,12 +767,12 @@ def test_scenarios_page_shows_coverage_donuts_before_and_after(monkeypatch, tmp_
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("Before" in c.value for c in a.caption))
+    at = _settle(at, lambda a: any("Before" in m.value for m in a.markdown))
 
     assert not at.exception
-    captions = [c.value for c in at.caption]
-    assert any("Before · coverage_v1 · 4 of 5" in c for c in captions)
-    assert any("After · coverage_v2 · 5 of 5" in c for c in captions)
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Before · coverage_v1 · 4 of 5" in markdown_text
+    assert "After · coverage_v2 · 5 of 5" in markdown_text
 
 
 def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypatch, tmp_path, ui_script_path):
@@ -808,7 +830,9 @@ def test_execution_inputs_locked_when_not_awaiting_approval(monkeypatch, tmp_pat
     comment_input = next(t for t in at.text_input if t.label == "Comment (optional)")
     assert reviewer_input.disabled is True
     assert comment_input.disabled is True
-    assert any("Locked until the run reaches AWAITING_APPROVAL" in w.value for w in at.warning)
+    # The blocker banner is now an aae-banner HTML block (ui_components.
+    # banner()), not a native st.warning.
+    assert any("Locked until the run reaches AWAITING_APPROVAL" in m.value for m in at.markdown)
 
 
 def test_execution_approve_requires_reviewer_name(monkeypatch, tmp_path, ui_script_path):
@@ -873,7 +897,9 @@ def test_execution_execute_unlocks_after_approval(monkeypatch, tmp_path, ui_scri
     next(b for b in at.button if b.label == "Approve").click().run()
 
     assert next(b for b in at.button if b.label == "Execute").disabled is False
-    assert any("Ready to run the five fixed tests." in c.value for c in at.caption)
+    # The reason caption is now an aae-caption HTML block (ui_components.
+    # small_caption()), not a native st.caption.
+    assert any("Ready to run the five fixed tests." in m.value for m in at.markdown)
 
 
 def test_execution_shows_fixed_manifest_with_real_expected_assertions(monkeypatch, tmp_path, ui_script_path):
@@ -884,15 +910,14 @@ def test_execution_shows_fixed_manifest_with_real_expected_assertions(monkeypatc
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "execution")
-    at = _settle(at, lambda a: any("ID" in getattr(t.value, "columns", []) for t in a.table))
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
 
-    manifest_table = next(t.value for t in at.table if "Expected" in getattr(t.value, "columns", []))
-    assert list(manifest_table["ID"]) == ["T01", "T02", "T03", "T04", "T05"]
-    t04_row = manifest_table[manifest_table["ID"] == "T04"]
-    assert t04_row["Expected"].iloc[0] == "shared checks only"
-    t03_row = manifest_table[manifest_table["ID"] == "T03"]
-    assert "conflict_rejected" in t03_row["Expected"].iloc[0]
-    assert any("ledger_success_count == 1" in c.value for c in at.caption)
+    # The manifest is now one aae-table HTML block (ui_components.table()).
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "T01" in markdown_text and "T05" in markdown_text
+    assert "shared checks only" in markdown_text  # T04's Expected cell
+    assert "conflict_rejected" in markdown_text  # T03's Expected cell
+    assert "ledger_success_count == 1" in markdown_text
 
 
 # ---------------------------------------------------------------------------
@@ -1051,21 +1076,30 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
     at.run()
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
-    at = _settle(at, lambda a: any("Agent workflow" in w.value for w in list(a.success) + list(a.error)))
+    at = _settle(at, lambda a: any("Agent workflow" in m.value for m in a.markdown))
 
     assert not at.exception
-    banner_texts = " ".join(w.value for w in list(at.success) + list(at.error))
-    assert "Agent workflow: COMPLETED" in banner_texts
-    assert "Payment verification: FAILED" in banner_texts
-
-    results_table = next(t.value for t in at.table if "Actual" in getattr(t.value, "columns", []))
-    assert list(results_table["ID"]) == ["T01", "T02", "T03", "T04", "T05"]
-    t04_row = results_table[results_table["ID"] == "T04"]
-    assert t04_row["Expected"].iloc[0] == "1 ledger entry"
-    assert t04_row["Actual"].iloc[0] == "2 ledger entries"
-    assert t04_row["Status"].iloc[0] == "FAIL"
-
+    # Verdict banners and the Test results table are now ui_components.
+    # verdict()/table() HTML (point A.6: no st.success/st.error/st.table
+    # for these styled sections), not native success/error/table elements.
     markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Agent workflow: COMPLETED" in markdown_text
+    assert "aae-banner--workflow-ok" in markdown_text
+    assert "Payment verification: FAILED" in markdown_text
+    assert "aae-banner--verification-fail" in markdown_text
+
+    # KPI tiles (ui_components.kpi_row()) -- never previously tested.
+    assert "aae-kpi-row" in markdown_text
+    assert "Total tests" in markdown_text and ">5<" in markdown_text
+    assert "aae-kpi-value--passed" in markdown_text
+    assert "aae-kpi-value--failed" in markdown_text
+
+    assert "T01" in markdown_text and "T05" in markdown_text
+    assert "1 ledger entry" in markdown_text  # T04 Expected
+    assert "2 ledger entries" in markdown_text  # T04 Actual
+    assert 'aae-pill--fail">FAIL</span>' in markdown_text
+    assert "aae-row--fail" in markdown_text
+
     assert "Observed 2 ledger entries instead of 1 ledger entry." in markdown_text
     assert "BR06: Re-delivery" in markdown_text
     assert "Developer fix. The agent reports defects; it does not change code." in markdown_text
