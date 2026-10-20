@@ -219,3 +219,51 @@ def test_round4_and_round4_probabilities():
     assert decision_trace.round4(0.41879999999999995) == 0.4188
     assert decision_trace.round4(None) is None
     assert decision_trace.round4_probabilities({"a": 0.123456}) == {"a": 0.1235}
+
+
+# ---------------------------------------------------------------------------
+# pad_not_reached_rows -- UI-only (the Analysis page's live trace): appends
+# a greyed "not reached" row for every checkpoint absent from the real
+# rows, in ALL_CHECKPOINTS order. report.md/Scenarios/Results never call
+# this -- a finished run's decisions.json already has an entry for every
+# checkpoint it reached.
+# ---------------------------------------------------------------------------
+
+
+def test_all_checkpoints_matches_the_real_checkpoint_names():
+    # checkpoints._checkpoint_name's own tool->checkpoint mapping, copied
+    # here as a literal set to confirm ALL_CHECKPOINTS can't silently drift.
+    assert decision_trace.ALL_CHECKPOINTS == ["AMBIGUITY+STRATEGY", "COVERAGE", "FAILURE", "COMPLETION"]
+
+
+def test_pad_not_reached_rows_is_noop_when_all_checkpoints_present():
+    rows = [
+        {"checkpoint": cp, "icon": "✅", "decision_text": "x", "confidence": None, "threshold": None,
+         "route": "AUTO", "source": "DECIDER", "override": False}
+        for cp in decision_trace.ALL_CHECKPOINTS
+    ]
+    assert decision_trace.pad_not_reached_rows(list(rows)) == rows
+
+
+def test_pad_not_reached_rows_appends_missing_checkpoints_in_order():
+    rows = [
+        {"checkpoint": "AMBIGUITY+STRATEGY", "icon": "✅", "decision_text": "x", "confidence": None,
+         "threshold": None, "route": "AUTO", "source": "DECIDER", "override": False},
+        {"checkpoint": "COVERAGE", "icon": "⏳", "decision_text": "Awaiting human", "confidence": 0.69,
+         "threshold": 0.75, "route": "ESCALATED", "source": "DECIDER", "override": False},
+    ]
+    padded = decision_trace.pad_not_reached_rows(list(rows))
+
+    assert [row["checkpoint"] for row in padded] == ["AMBIGUITY+STRATEGY", "COVERAGE", "FAILURE", "COMPLETION"]
+    assert padded[0] == rows[0]
+    assert padded[1] == rows[1]
+    for row in padded[2:]:
+        assert row["decision_text"] == "not reached"
+        assert row["confidence"] is None
+        assert row["threshold"] is None
+
+
+def test_pad_not_reached_rows_empty_input_appends_all_four():
+    padded = decision_trace.pad_not_reached_rows([])
+    assert [row["checkpoint"] for row in padded] == decision_trace.ALL_CHECKPOINTS
+    assert all(row["decision_text"] == "not reached" for row in padded)

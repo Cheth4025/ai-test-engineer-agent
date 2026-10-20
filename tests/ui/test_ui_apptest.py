@@ -109,7 +109,9 @@ def _navigate(at: AppTest, nav_id: str) -> AppTest:
 # ---------------------------------------------------------------------------
 
 
-def test_app_loads_on_overview_with_nav_and_start_button(monkeypatch, tmp_path, ui_script_path):
+def test_app_loads_on_overview_with_nav_and_no_start_button(monkeypatch, tmp_path, ui_script_path):
+    """Overview is static reference content only (polish-1): Start Analysis
+    moved to the new Analysis nav item, which is now the 2nd of 5 pages."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
@@ -118,22 +120,35 @@ def test_app_loads_on_overview_with_nav_and_start_button(monkeypatch, tmp_path, 
     nav_labels = {b.key: b.label for b in at.sidebar.button if b.key and b.key.startswith("nav_")}
     assert nav_labels == {
         "nav_requirements": "Overview",
+        "nav_analysis": "Analysis",
         "nav_scenarios": "Scenarios",
         "nav_execution": "Execution",
         "nav_results": "Results",
     }
     assert at.title[0].value == "Overview"
     assert any("Payment Retry & Duplicate Charge Prevention" in c.value for c in at.caption)
+    assert not any(b.label == "Start analysis" for b in at.button)
+
+
+def test_analysis_page_has_the_start_button(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+
+    assert not at.exception
+    assert at.title[0].value == "Analysis"
     assert any(b.label == "Start analysis" for b in at.button)
 
 
-def test_sidebar_navigation_reaches_all_four_pages_with_right_titles(monkeypatch, tmp_path, ui_script_path):
+def test_sidebar_navigation_reaches_all_five_pages_with_right_titles(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
 
     expected_titles = {
         "requirements": "Overview",
+        "analysis": "Analysis",
         "scenarios": "Scenarios",
         "execution": "Execution",
         "results": "Results",
@@ -157,7 +172,7 @@ def test_navigating_never_calls_orchestration_entry_points(monkeypatch, tmp_path
 
     at = _app(ui_script_path)
     at.run()
-    for nav_id in ("scenarios", "execution", "results", "requirements"):
+    for nav_id in ("analysis", "scenarios", "execution", "results", "requirements"):
         at = _navigate(at, nav_id)
         assert not at.exception
 
@@ -309,12 +324,13 @@ def test_sidebar_shows_notice_pointing_to_page_with_pending_decision(monkeypatch
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _settle(at, lambda a: any("Scenarios" in w.value for w in a.sidebar.warning))
+    at = _settle(at, lambda a: any("Analysis" in w.value for w in a.sidebar.warning))
 
     assert not at.exception
     assert any(
-        w.value == "A decision needs your confirmation — see 'Scenarios'." for w in at.sidebar.warning
+        w.value == "A decision needs your confirmation — see 'Analysis'." for w in at.sidebar.warning
     )
 
 
@@ -355,25 +371,32 @@ def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeyp
     """The action banner is now an aae-banner HTML block (ui_components.
     banner()), not a native st.warning -- the same-page link is a real
     <a href="#aae-action-anchor"> anchor embedded in the banner; the
-    cross-page case is the banner plus a real st.button beside it."""
+    cross-page case is the banner plus a real st.button beside it. A
+    pending decision is answered only on Analysis (polish-1): Scenarios
+    now gets the cross-page "Go to Analysis" case too, same as Overview."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
     monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: any("Action needed below" in m.value for m in a.markdown))
 
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "confirm the Decider decision" in markdown_text
     assert '<a href="#aae-action-anchor">Jump to it</a>' in markdown_text
 
+    at = _navigate(at, "scenarios")
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Action needed" in markdown_text and "see 'Analysis'" in markdown_text
+    assert any(b.label == "Go to Analysis" for b in at.button)
+
     at = _navigate(at, "requirements")
     markdown_text = " ".join(m.value for m in at.markdown)
-    assert "Action needed" in markdown_text and "see 'Scenarios'" in markdown_text
-    assert any(b.label == "Go to Scenarios" for b in at.button)
+    assert "Action needed" in markdown_text and "see 'Analysis'" in markdown_text
+    assert any(b.label == "Go to Analysis" for b in at.button)
 
 
 def test_action_banner_on_overview_for_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
@@ -429,8 +452,8 @@ def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_c
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     radio = next(r for r in at.radio if r.label == "Your choice")
@@ -468,8 +491,8 @@ def test_confirm_decision_choice_survives_fragment_reruns_and_submits_exactly_th
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     # The default verdicts' suggestion is REMEDIATE_GAP -- deliberately pick
@@ -503,8 +526,8 @@ def test_second_escalation_in_same_run_gets_a_fresh_unanswered_radio(monkeypatch
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     next(r for r in at.radio if r.label == "Your choice").set_value("REMEDIATE_GAP").run()
@@ -550,6 +573,7 @@ def test_duplicate_start_analysis_click_while_busy_does_not_start_second_run(mon
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     second_start_button = next(b for b in at.button if b.label == "Start analysis")
     assert second_start_button.disabled is True  # disabled buttons can't be re-clicked
@@ -572,6 +596,7 @@ def test_new_analysis_disabled_while_awaiting_decision_confirmation(monkeypatch,
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _settle(at, lambda a: _has_label(a, "button", "New Analysis"))
 
@@ -591,6 +616,7 @@ def test_submit_clarification_disabled_when_awaiting_clarification(monkeypatch, 
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _settle(at, lambda a: _has_label(a, "button", "Submit clarification"))
 
@@ -718,11 +744,15 @@ def _register_remediated_run(tmp_path, confidence: float = 0.62) -> RunControlle
 
 
 def _start_into_fixture(at: AppTest, monkeypatch, controller: RunController) -> AppTest:
+    """Start analysis lives only on the Analysis page (polish-1) -- navigate
+    there first so every caller can click it regardless of which page the
+    AppTest instance currently has selected."""
     monkeypatch.setattr(
         orchestration,
         "run_initial_pass",
         lambda: {"run_id": controller.run_id, "workflow_state": "AWAITING_APPROVAL", "stage": "AWAITING_APPROVAL"},
     )
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     return at
 
@@ -1074,6 +1104,7 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: any("Agent workflow" in m.value for m in a.markdown))
@@ -1115,6 +1146,7 @@ def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
@@ -1142,6 +1174,7 @@ def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypa
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
@@ -1171,6 +1204,7 @@ def test_results_page_evidence_tabs_and_downloads(monkeypatch, tmp_path, ui_scri
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: len(a.tabs) >= 3)

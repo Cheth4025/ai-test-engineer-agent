@@ -183,3 +183,32 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
         _emit(decider_record, None)  # genuinely still awaiting human
 
     return rows
+
+
+# checkpoints._checkpoint_name's tool->checkpoint mapping, in the fixed
+# pipeline order the Analysis page's live trace shows them.
+ALL_CHECKPOINTS = ["AMBIGUITY+STRATEGY", "COVERAGE", "FAILURE", "COMPLETION"]
+
+
+def pad_not_reached_rows(rows: list[dict]) -> list[dict]:
+    """UI-only (the Analysis page's live decision trace): appends a greyed
+    "not reached" row for every checkpoint in ALL_CHECKPOINTS absent from
+    rows, in ALL_CHECKPOINTS order, after the real rows. report.md and the
+    Scenarios/Results pages never call this -- a finished run's
+    decisions.json already has an entry for every checkpoint it reached,
+    and report.md documents only what happened, never padded placeholders."""
+    seen = {row["checkpoint"] for row in rows}
+    return rows + [
+        {
+            "checkpoint": checkpoint,
+            "icon": "⬜",
+            "decision_text": "not reached",
+            "confidence": None,
+            "threshold": None,
+            "route": None,
+            "source": None,
+            "override": False,
+        }
+        for checkpoint in ALL_CHECKPOINTS
+        if checkpoint not in seen
+    ]

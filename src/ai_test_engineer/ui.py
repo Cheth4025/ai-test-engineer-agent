@@ -58,6 +58,7 @@ from ai_test_engineer.decision_trace import (
     build_decision_trace,
     decider_decision_value,
     decision_icon,
+    pad_not_reached_rows,
     primary_choice_confidence,
     round4,
     round4_probabilities,
@@ -71,8 +72,14 @@ APP_TITLE = "Assurance Agent Experience"
 # (nav id, label, Material icon name). IDs are stable identifiers used for
 # st.session_state/keys; labels are what's shown. docs/mockups/README.md
 # row 1 (owner-approved layout change): icon + label nav, not tabs/radio.
+# "analysis" (polish-1): a further deviation from docs/06 Section 1's "four
+# native tabs" beyond the already-approved one -- Decider escalations and
+# rule-match checks are answered ONLY here, not on Overview/Scenarios/
+# Execution, which keep read-only views and a "Go to Analysis" link
+# instead. Noted in the PR description, not in docs/ (never edited here).
 NAV_ITEMS = [
     ("requirements", "Overview", "description"),
+    ("analysis", "Analysis", "insights"),
     ("scenarios", "Scenarios", "list"),
     ("execution", "Execution", "play_arrow"),
     ("results", "Results", "bar_chart"),
@@ -81,12 +88,15 @@ NAV_LABELS = {item_id: label for item_id, label, _icon in NAV_ITEMS}
 
 # Which page owns the Confirm decision control for a given pending
 # checkpoint tool -- the sidebar points the user there when a decision is
-# awaiting confirmation but they're looking at a different page.
+# awaiting confirmation but they're looking at a different page. All four
+# now point at Analysis (polish-1): Start Analysis, every Confirm-decision
+# control, and rule-match (grounding) resolution all moved there from
+# Overview/Scenarios/Execution.
 PENDING_SECTION_FOR_TOOL = {
-    "generate_scenarios": "requirements",
-    "save_scenario_set": "scenarios",
-    "finalize_analysis": "execution",
-    "render_report": "execution",
+    "generate_scenarios": "analysis",
+    "save_scenario_set": "analysis",
+    "finalize_analysis": "analysis",
+    "render_report": "analysis",
 }
 
 # Doc 06's escalation checkpoints and their fixed option sets -- same mapping
@@ -198,6 +208,122 @@ def can_execute(state: UIState, controller: RunController | None) -> bool:
     if controller is None or state.worker_busy:
         return False
     return controller.workflow_state == "APPROVED" and not controller.execution_started
+
+
+def pending_action_count(controller: RunController | None, versions: list[dict] | None = None) -> int:
+    """The Analysis nav badge count: 1 for a pending Decider escalation,
+    plus one per unresolved rule-match item on the LATEST scenario
+    version -- matches the mock's "1 Decider decision and 4 rule-match
+    checks" wording exactly. Never counts approval/execute-ready (those
+    badge Execution instead, via execution_pending_count)."""
+    count = 0
+    if controller is not None and controller.pending_decision is not None:
+        count += 1
+    if versions:
+        count += len(versions[-1].get("unresolved_grounding") or [])
+    return count
+
+
+def execution_pending_count(controller: RunController | None) -> int:
+    """The Execution nav badge: 1 when approval or execute-ready is the
+    single pending action, else 0."""
+    action = sidebar_pending_action(controller)
+    return 1 if action is not None and action["kind"] in ("approval", "execute_ready") else 0
+
+
+# ---------------------------------------------------------------------------
+# Analysis page's 7-step progress tracker (Interpret/Generate/Coverage/
+# Decide/Approve/Execute/Report) -- a pure function over controller.stage/
+# workflow_state/pending_decision, same style as the guards above.
+# ---------------------------------------------------------------------------
+
+_PROGRESS_STEPS = ["Interpret", "Generate", "Coverage", "Decide", "Approve", "Execute", "Report"]
+_DECIDE_STEP = 3
+
+# Which earlier step is "done" (its own check already ran) when a
+# pre-Approval Decider escalation is pending -- Decide (step 3) is then
+# "current". generate_scenarios gates whether scenario generation proceeds
+# at all, so Generate is the step it belongs to; save_scenario_set gates
+# the coverage result, so Coverage is -- the one example the 05_analysis.png
+# mock actually shows (Coverage done 4/5, Decide current), generalized the
+# same way to the other pre-Approval checkpoint.
+_PRE_APPROVAL_DECISION_DONE_THROUGH = {
+    "generate_scenarios": 1,
+    "save_scenario_set": 2,
+}
+
+# stage -> (done_through_index, current_index) for every stage with no
+# pending AWAITING_DECISION_CONFIRMATION escalation. REMEDIATING/RESCORING
+# fold back into "Coverage" (index 2): they're the sub-flow that resolves a
+# confirmed REMEDIATE_GAP, not a new step. ANALYZING_RESULTS/REPORTING both
+# fold into "Report" (index 6): the 7 fixed steps have no separate
+# "Analyze" slot.
+_STAGE_DONE_CURRENT = {
+    "INTERPRETING": (-1, 0),
+    "GENERATING": (0, 1),
+    "SCORING": (1, 2),
+    "REMEDIATING": (1, 2),
+    "RESCORING": (1, 2),
+    "AWAITING_APPROVAL": (3, 4),
+    "APPROVED": (4, 5),
+    "EXECUTING": (4, 5),
+    "ANALYZING_RESULTS": (5, 6),
+    "REPORTING": (5, 6),
+}
+
+
+def _progress_steps(done_through: int, current_index: int | None, *, waiting: bool = False) -> list[dict]:
+    steps = []
+    for index, label in enumerate(_PROGRESS_STEPS):
+        if index <= done_through:
+            state = "done"
+        elif index == current_index:
+            state = "current"
+        else:
+            state = "future"
+        sub = "waiting for you" if (waiting and index == current_index) else ""
+        steps.append({"label": label, "sub": sub, "state": state})
+    return steps
+
+
+def progress_steps_for(controller: RunController | None) -> list[dict]:
+    """Maps controller.stage/workflow_state/pending_decision to each of the
+    7 fixed steps' done/current/future state, for ui_components.progress().
+    Pure function, no Streamlit, no I/O beyond controller's already-loaded
+    attributes -- same style as can_execute etc., unit-tested directly in
+    tests/ui/test_ui_guards.py.
+
+    BLOCKED/STOPPED deliberately return "position unknown" (all future):
+    checkpoints.py/ui.py overwrite controller.stage to the literal string
+    "BLOCKED"/"STOPPED" at the moment of halting (see state.py's
+    set_workflow_state call sites), which loses which real stage it halted
+    FROM. Recovering that would need a backend change outside this UI-only
+    polish pass -- the halt reason is already shown elsewhere (the top-bar
+    chip's state·stage pair and the page's own error message)."""
+    if controller is None:
+        return _progress_steps(-1, None)
+
+    pending = controller.pending_decision
+    if controller.stage == "AWAITING_DECISION_CONFIRMATION" and pending is not None:
+        tool_name = pending.get("tool_name")
+        if tool_name in _PRE_APPROVAL_DECISION_DONE_THROUGH:
+            return _progress_steps(_PRE_APPROVAL_DECISION_DONE_THROUGH[tool_name], _DECIDE_STEP, waiting=True)
+        return _progress_steps(5, 6, waiting=True)  # finalize_analysis / render_report
+
+    if controller.stage == "AWAITING_CLARIFICATION":
+        return _progress_steps(0, 1, waiting=True)
+
+    if controller.workflow_state == "COMPLETED":
+        return _progress_steps(6, None)
+    if controller.workflow_state == "REJECTED":
+        return _progress_steps(4, None)
+    if controller.workflow_state in ("BLOCKED", "STOPPED"):
+        return _progress_steps(-1, None)
+
+    done_current = _STAGE_DONE_CURRENT.get(controller.stage)
+    if done_current is None:
+        return _progress_steps(-1, None)
+    return _progress_steps(*done_current)
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +670,7 @@ def pending_action(controller: RunController | None, versions: list[dict] | None
     if action is not None:
         return action
     if versions and versions[-1].get("unresolved_grounding"):
-        return {"kind": "grounding", "section_id": "scenarios"}
+        return {"kind": "grounding", "section_id": "analysis"}
     return None
 
 
@@ -700,6 +826,39 @@ def _render_top_bar_chips(data: dict) -> None:
     st.markdown(f'<div class="aae-status-chips">{spans}</div>', unsafe_allow_html=True)
 
 
+def _nav_badge_counts(controller: RunController | None, versions_list: list[dict]) -> dict[str, int]:
+    """Pending-human-action count per nav item -- 0 for any id not listed
+    (Overview/Scenarios/Results never badge)."""
+    return {
+        "analysis": pending_action_count(controller, versions_list),
+        "execution": execution_pending_count(controller),
+    }
+
+
+def _nav_badge_css(nav_id: str, count: int) -> str:
+    """The mock's amber pill, as a per-run CSS ::after overlay on the nav
+    button (kept alongside the "· <count>" label-text suffix for AppTest
+    testability -- see _render_sidebar). count is always a real int here
+    (pending_action_count/execution_pending_count's own return type), never
+    arbitrary text, so no escaping is needed for a value going into a
+    <style> block -- it's never passed through unsafe_allow_html."""
+    assert isinstance(count, int)
+    return f"""
+    <style>
+    .st-key-nav_{nav_id} button::after {{
+        content: "{count}";
+        background-color: #F59E0B;
+        color: #0F1B2D;
+        font-size: 11px;
+        font-weight: 700;
+        border-radius: 999px;
+        padding: 1px 7px;
+        margin-left: 6px;
+    }}
+    </style>
+    """
+
+
 def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
     """Nav, Refresh status, and the pending-decision notice -- nothing else
     (docs/mockups/README.md row 1, owner-approved layout change -- see
@@ -709,9 +868,14 @@ def _render_sidebar(state: UIState, data: dict, current_nav_id: str) -> str:
     former tabs/radio gave (tests/ui/test_ui_apptest.py's reload-safety
     test covers this directly)."""
     controller: RunController | None = data["controller"]
+    badge_counts = _nav_badge_counts(controller, data.get("versions", []))
     with st.sidebar:
         for item_id, label, icon in NAV_ITEMS:
-            if st.button(label, key=f"nav_{item_id}", icon=f":material/{icon}:", width="stretch"):
+            count = badge_counts.get(item_id, 0)
+            button_label = f"{label} · {count}" if count > 0 else label
+            if count > 0:
+                st.markdown(_nav_badge_css(item_id, count), unsafe_allow_html=True)
+            if st.button(button_label, key=f"nav_{item_id}", icon=f":material/{icon}:", width="stretch"):
                 st.session_state["nav_id"] = item_id
                 current_nav_id = item_id
 
@@ -921,22 +1085,14 @@ _AGENT_STEPS = [
 
 
 def _render_page_requirements(state: UIState, data: dict) -> None:
-    controller: RunController | None = data["controller"]
-
-    header_col, button_col = st.columns([4, 1], vertical_alignment="center")
-    with header_col:
-        _render_page_header("Overview")
+    """Overview: static reference content only (docs/mockups/README.md's
+    layout spirit, tightened further for polish-1) -- no Start button, no
+    Decider escalation, no run-status error. Those all live on Analysis
+    now; see _render_page_analysis. The action banner stays, pointing
+    there (or to Execution for approval/execute-ready) -- Overview is
+    still a page a human might be looking at when something needs them."""
+    _render_page_header("Overview")
     _render_action_banner(data, "requirements")
-    with button_col:
-        label = "New Analysis" if state.current_run_id is not None else "Start analysis"
-        if st.button(
-            label,
-            type="primary",
-            key="start_or_new_analysis_btn",
-            disabled=not can_start_analysis(state, controller),
-        ):
-            start_analysis(state)
-            st.rerun()
 
     col1, col2 = st.columns(2)
     with col1:
@@ -965,21 +1121,107 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
         steps_body = "<ol>" + "".join(f"<li>{ui_components.escape(step)}</li>" for step in _AGENT_STEPS) + "</ol>"
         st.markdown(ui_components.card("What the agent does", steps_body), unsafe_allow_html=True)
 
+
+# ---------------------------------------------------------------------------
+# Page "analysis" (Analysis) -- the ONLY place Decider escalations and
+# rule-match (grounding) checks are answered. Scenarios/Execution keep
+# read-only views and a "Go to Analysis" link (via _render_action_banner,
+# automatic once PENDING_SECTION_FOR_TOOL/pending_action's grounding
+# fallback point here).
+# ---------------------------------------------------------------------------
+
+
+def _render_rule_match_rows(state: UIState, controller: RunController, selected_version: int, entry: dict) -> None:
+    """One compact row per unresolved rule-match item: scenario | claims
+    rules | Decider call | [Matches] [No match], with the optional note
+    collapsed into a small expander so the default row stays one line
+    tall (05_analysis.png's "Decision inbox · Rule match" table). Each row
+    is still its own st.form (same no-stale-default guarantee as the
+    original radio+submit design) -- two submit buttons instead of a
+    radio, each committing its own literal CONFIRMED_GROUNDED/
+    CONFIRMED_NOT_GROUNDED choice directly (internal literals unchanged)."""
+    scenarios = (entry["scenarios"] or {}).get("scenarios", [])
+    catalog = {s["scenario_id"]: s for s in scenarios}
+    current_action = pending_action(controller, [entry])
+
+    for index, scenario_id in enumerate(entry["unresolved_grounding"]):
+        if index == 0 and current_action is not None and current_action["kind"] == "grounding":
+            _render_action_anchor()
+        scenario = catalog.get(scenario_id, {})
+        with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
+            cols = st.columns([2, 2, 2, 2])
+            cols[0].markdown(f"**{ui_components.escape(scenario_id)}** — {ui_components.escape(scenario.get('title', '—'))}")
+            cols[1].markdown(ui_components.escape(", ".join(scenario.get("rule_ids", []))))
+            cols[2].markdown("Decider: review needed")
+            with cols[3]:
+                button_cols = st.columns(2)
+                matches_clicked = button_cols[0].form_submit_button("Matches")
+                no_match_clicked = button_cols[1].form_submit_button("No match")
+            with st.expander("Note (optional)"):
+                note = st.text_input("Note", key=f"note_{selected_version}_{scenario_id}", label_visibility="collapsed")
+            if matches_clicked or no_match_clicked:
+                resolution = "CONFIRMED_GROUNDED" if matches_clicked else "CONFIRMED_NOT_GROUNDED"
+                with state.lock:  # serialize against a worker thread writing the same run's files
+                    controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
+                st.rerun()
+
+
+def _render_page_analysis(state: UIState, data: dict) -> None:
+    controller: RunController | None = data["controller"]
+
+    header_col, button_col = st.columns([4, 1], vertical_alignment="center")
+    with header_col:
+        _render_page_header("Analysis")
+    _render_action_banner(data, "analysis")
+    with button_col:
+        label = "New Analysis" if state.current_run_id is not None else "Start analysis"
+        if st.button(
+            label,
+            type="primary",
+            key="start_or_new_analysis_btn",
+            disabled=not can_start_analysis(state, controller),
+        ):
+            start_analysis(state)
+            st.rerun()
+
+    st.markdown(ui_components.card("Progress", ui_components.progress(progress_steps_for(controller))), unsafe_allow_html=True)
+
     if controller is not None and controller.stage == "AWAITING_CLARIFICATION":
         st.warning("Run is paused awaiting clarification on a critical ambiguity.")
         st.text_area("Submit clarification", disabled=True, placeholder="Not implemented in this milestone.")
         st.button("Submit clarification", disabled=True)
 
-    if (
+    if controller is not None and controller.workflow_state in {"BLOCKED", "STOPPED"}:
+        st.error(f"Run {controller.workflow_state}: {controller.halt_reason or '(no reason recorded)'}")
+
+    versions_list = data.get("versions", [])
+    has_pending_decision = (
         controller is not None
         and controller.stage == "AWAITING_DECISION_CONFIRMATION"
         and controller.pending_decision is not None
-        and controller.pending_decision.get("tool_name") == "generate_scenarios"
-    ):
-        _render_confirm_decision(state, controller)
+    )
+    latest_entry = versions_list[-1] if versions_list else None
+    has_unresolved_rule_match = bool(latest_entry and latest_entry["unresolved_grounding"])
 
-    if controller is not None and controller.workflow_state in {"BLOCKED", "STOPPED"}:
-        st.error(f"Run {controller.workflow_state}: {controller.halt_reason or '(no reason recorded)'}")
+    if has_pending_decision or has_unresolved_rule_match:
+        inbox_left, inbox_right = st.columns(2)
+        if has_pending_decision:
+            with inbox_left, ui_components.widget_card_container("decision-inbox"):
+                _render_confirm_decision(state, controller)
+        if has_unresolved_rule_match:
+            with inbox_right, ui_components.widget_card_container("rule-match-inbox"):
+                _card_heading(f"Decision inbox · Rule match (v{latest_entry['version']})")
+                _render_rule_match_rows(state, controller, latest_entry["version"], latest_entry)
+
+    if controller is not None:
+        trace_rows = pad_not_reached_rows(build_decision_trace(data.get("decisions") or [], _decider_cfg()))
+        with ui_components.widget_card_container("analysis-decision-trace"):
+            # _render_decision_trace_rows (and this card's styling) is
+            # deferred to Commit C5, which replaces it with
+            # decision_trace_table() once decision_trace.py's "outcome"
+            # field exists -- see the polish-1 ledger.
+            _card_heading("Decision trace")
+            _render_decision_trace_rows(trace_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1120,36 +1362,6 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
             caption_text = f"From scenarios_v{selected_version}.json."
         st.markdown(ui_components.small_caption(caption_text), unsafe_allow_html=True)
 
-        if selected_version == latest_version:
-            current_action = pending_action(controller, versions_list)
-            for index, scenario_id in enumerate(entry["unresolved_grounding"]):
-                if index == 0 and current_action is not None and current_action["kind"] == "grounding":
-                    _render_action_anchor()
-                with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
-                    st.write(f"Resolve grounding flag for {scenario_id}")
-                    # index=None (same fix as the Confirm decision radio
-                    # above, same pattern/bug class) -- no default is
-                    # silently carried as "the" resolution before a human
-                    # has actually picked one. st.form_submit_button's
-                    # disabled= can't react live to resolution's value (form
-                    # widgets only commit on submit), so the guard against an
-                    # empty pick is a post-submit check instead of a
-                    # pre-disabled button.
-                    resolution = st.radio(
-                        "Resolution",
-                        ["CONFIRMED_GROUNDED", "CONFIRMED_NOT_GROUNDED"],
-                        index=None,
-                        key=f"res_{selected_version}_{scenario_id}",
-                    )
-                    note = st.text_input("Note (optional)", key=f"note_{selected_version}_{scenario_id}")
-                    if st.form_submit_button("Resolve", type="secondary", disabled=state.worker_busy):
-                        if resolution is None:
-                            st.error("Pick a resolution before submitting.")
-                        else:
-                            with state.lock:  # serialize against a worker thread writing the same run's files
-                                controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
-                            st.rerun()
-
     with col_right, ui_components.widget_card_container("coverage"):
         _card_heading("Coverage")
         donut_entries = [entry for entry in versions_list if entry["effective_coverage"] is not None]
@@ -1229,13 +1441,6 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                     else:
                         block = ui_components.code_block(ui_components.escape("(no gherkin available)"))
                     st.markdown(block, unsafe_allow_html=True)
-
-    if (
-        controller.stage == "AWAITING_DECISION_CONFIRMATION"
-        and controller.pending_decision is not None
-        and controller.pending_decision.get("tool_name") == "save_scenario_set"
-    ):
-        _render_confirm_decision(state, controller)
 
 
 # ---------------------------------------------------------------------------
@@ -1393,13 +1598,6 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                 with state.lock:
                     controller.record_approval("APPROVE", reviewer, latest_version, comment or None)
                 st.rerun()
-
-    if (
-        controller is not None
-        and controller.pending_decision is not None
-        and controller.pending_decision.get("tool_name") in ("finalize_analysis", "render_report")
-    ):
-        _render_confirm_decision(state, controller)
 
     results = data.get("results")
     run_col, log_col = st.columns(2)
@@ -1587,6 +1785,7 @@ def _render_page_results(state: UIState, data: dict) -> None:
 
 _NAV_RENDERERS = {
     "requirements": _render_page_requirements,
+    "analysis": _render_page_analysis,
     "scenarios": _render_page_scenarios,
     "execution": _render_page_execution,
     "results": _render_page_results,
