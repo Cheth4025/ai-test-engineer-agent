@@ -912,7 +912,7 @@ _ACTION_ANCHOR_ID = "aae-action-anchor"
 
 _ACTION_VERB = {
     "decision": "confirm the Decider decision",
-    "grounding": "resolve the grounding flag",
+    "grounding": "resolve the rule-match check",
     "approval": "record the approval decision",
     "execute_ready": "run the approved tests",
 }
@@ -1556,14 +1556,21 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             if not blockers:
                 st.markdown(
                     ui_components.banner(
-                        "Ready for approval — coverage 5/5, no open grounding flags.", None, variant="workflow-ok"
+                        "Ready for approval — coverage 5/5, all rule-match checks answered.",
+                        None,
+                        variant="workflow-ok",
                     ),
                     unsafe_allow_html=True,
                 )
             else:
+                # Wording only (plan C6-8): approval_blockers()'s own
+                # string (state.py:279) still says "grounding flag" --
+                # internal name unchanged, translated at the render
+                # boundary only.
                 for blocker in blockers:
+                    display_text = blocker.replace("grounding flag", "rule-match check")
                     st.markdown(
-                        ui_components.banner(blocker, None, variant="action-needed"), unsafe_allow_html=True
+                        ui_components.banner(display_text, None, variant="action-needed"), unsafe_allow_html=True
                     )
 
             reviewer = st.text_input("Reviewer name", key="reviewer_name", disabled=not execution_unlocked)
@@ -1615,6 +1622,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
         else:
             tests = results["tests"]
             passed = sum(1 for t in tests if t["status"] == "PASS")
+            failed = len(tests) - passed
             duration_s = round(results["duration_ms"] / 1000, 1)
             rows = [
                 [ui_components.escape(t["test_id"]), ui_components.escape(t["scenario_id"]), ui_components.pill(t["status"], t["status"].lower())]
@@ -1622,7 +1630,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             ]
             row_classes = ["aae-row--fail" if t["status"] == "FAIL" else "" for t in tests]
             body = ui_components.small_caption(
-                f"{passed}/{len(tests)} completed · {duration_s}s"
+                f"{len(tests)}/{len(tests)} run · {passed} passed · {failed} failed · {duration_s}s"
             ) + ui_components.table(["ID", "Scenario", "Result"], rows, row_classes=row_classes)
         st.markdown(ui_components.card("Test run", body), unsafe_allow_html=True)
     with log_col:

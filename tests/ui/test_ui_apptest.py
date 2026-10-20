@@ -840,6 +840,65 @@ def test_scenarios_page_gherkin_tabs_one_per_scenario(monkeypatch, tmp_path, ui_
 # ---------------------------------------------------------------------------
 
 
+def _register_run_with_unresolved_rule_match_blocker(tmp_path) -> RunController:
+    """AWAITING_APPROVAL with coverage 5/5 (not the blocker under test) but
+    one grounding item still NEEDS_REVIEW/unresolved -- isolates the
+    approval_blockers() "grounding flag not resolved" wording specifically."""
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "scenarios_v1.json").write_text(
+        json.dumps({"version": 1, "scenarios": [{"scenario_id": "S03", "title": "x", "rule_ids": ["BR03"]}]})
+    )
+    (run_dir / "coverage_v1.json").write_text(
+        json.dumps({"covered": 5, "required": 5, "percentage": 100.0, "rows": [], "rule_traceability": {}})
+    )
+    (run_dir / "grounding_v1.json").write_text(
+        json.dumps(
+            {
+                "scenario_set_version": 1,
+                "items": [{"scenario_id": "S03", "verdict": "NEEDS_REVIEW", "confidence": 0.5, "human_resolution": None}],
+            }
+        )
+    )
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def test_execution_blocker_text_says_rule_match_check_not_grounding_flag(monkeypatch, tmp_path, ui_script_path):
+    """Presentation-only wording (plan C6-8): approval_blockers()'s real
+    internal string still says "grounding flag" (state.py, unchanged) --
+    the UI translates it to "rule-match check" at the render boundary."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_with_unresolved_rule_match_blocker(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("S03" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "rule-match check not resolved" in markdown_text
+    assert "grounding flag" not in markdown_text
+
+
+def test_execution_ready_banner_says_rule_match_checks_not_grounding_flags(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)  # no blockers -- the "Ready for approval" banner
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("Ready for approval" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "rule-match checks" in markdown_text
+    assert "grounding flags" not in markdown_text
+
+
 def test_execution_inputs_locked_when_not_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
     """Reviewer name/Comment must be locked the same way the buttons
     already are -- previously only the buttons checked workflow_state ==
@@ -1093,6 +1152,26 @@ def test_execute_button_unlocks_when_approved(monkeypatch, tmp_path, ui_script_p
 
     assert next(b for b in at.button if b.label == "Execute").disabled is False
     assert any("Ready to execute" in w.value for w in at.sidebar.warning)
+
+
+def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_path, ui_script_path):
+    """Plan C6-8's execution summary format: "5/5 run · 4 passed · 1
+    failed · 1.0s" -- was "{passed}/{total} completed · {duration}s"."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "5/5 run · 4 passed · 1 failed · 0.4s" in markdown_text
 
 
 def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_script_path):
