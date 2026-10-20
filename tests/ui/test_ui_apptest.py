@@ -192,10 +192,14 @@ def test_plain_reload_never_calls_orchestration_entry_points(monkeypatch, tmp_pa
     assert not at.exception
 
 
-def test_static_css_injected_once_not_every_fragment_tick(monkeypatch, tmp_path, ui_script_path):
-    """Point A.1 of the polish-1 spec: "Inject ONE CSS block once per
-    run" -- the ~700-line AAE_CSS stylesheet must not be re-sent on every
-    st.fragment(run_every=2) tick (a plain reload/rerun simulates one)."""
+def test_static_css_is_present_on_every_run_not_only_the_first(monkeypatch, tmp_path, ui_script_path):
+    """Point A.1 of the polish-1 spec ("Inject ONE CSS block once per
+    run") means one st.markdown call per run, not "only the first run
+    ever": Streamlit drops any element a run doesn't re-emit, so CSS
+    injected only once would vanish from the DOM the moment anything else
+    reruns the script (a nav click, the 2s fragment tick, a reload) --
+    confirmed live on PR #6 (no styling after the first paint). AAE_CSS
+    must be emitted on every run, including a rerun triggered by a click."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
@@ -203,9 +207,9 @@ def test_static_css_injected_once_not_every_fragment_tick(monkeypatch, tmp_path,
     style_blocks = [m.value for m in at.markdown if "aae-card-heading" in m.value and "<style>" in m.value]
     assert len(style_blocks) == 1
 
-    at.run()  # a second tick -- same session, CSS must not be re-injected
+    at = _navigate(at, "analysis")  # a rerun via a real click, not a bare at.run()
     style_blocks_after = [m.value for m in at.markdown if "aae-card-heading" in m.value and "<style>" in m.value]
-    assert len(style_blocks_after) == 0
+    assert len(style_blocks_after) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +231,13 @@ def test_overview_shows_use_case_copy_and_real_br_table(monkeypatch, tmp_path, u
     assert "aae-label-problem" in markdown_text
     assert "aae-label-impact" in markdown_text
     assert "aae-label-mitigation" in markdown_text
-    # \$ (escaped) -- a bare "$100" is parsed as inline LaTeX math by
-    # st.markdown (caught visually; see ui.py's _USE_CASE_PROBLEM comment).
-    # labeled_section() escapes internally -- a literal backslash does not
-    # need html-escaping, so it still appears verbatim.
-    assert "A customer pays \\$100 once" in markdown_text  # PROBLEM copy
+    # No backslash-escaping here: this text goes into an HTML block via
+    # labeled_section()/ui_components.escape(), not plain st.markdown, so
+    # there's no LaTeX-math parsing to guard against -- a baked-in "\$"
+    # would show up as a literal backslash in the rendered card instead.
+    assert "A customer pays $100 once" in markdown_text  # PROBLEM copy
+    assert "\\$100" not in markdown_text
+    assert "\\$200" not in markdown_text
     assert "Inflated revenue" in markdown_text  # IMPACT copy
     assert "Test T04 catches the duplicate" in markdown_text  # MITIGATION copy
 

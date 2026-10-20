@@ -799,22 +799,21 @@ def _nav_css(current_nav_id: str) -> str:
     """
 
 
-_CSS_INJECTED_FLAG = "aae_static_css_injected"
-
-
 def _inject_css(current_nav_id: str) -> None:
-    """The static stylesheet (AAE_CSS, ~700 lines, plus the APP_TITLE
-    pseudo-element) is injected exactly once per browser session, not on
-    every st.fragment(run_every=2) tick -- re-sending and re-parsing the
-    same unchanging CSS every 2 seconds for the life of the session was
-    wasted bytes/DOM churn with no benefit. Session-scoped (not
-    module/process-scoped): a fresh browser session always gets the CSS
-    on its first render. _nav_css is the one part that genuinely changes
-    (which nav button is highlighted), so it's re-injected every tick."""
-    if not st.session_state.get(_CSS_INJECTED_FLAG, False):
-        st.markdown(ui_components.AAE_CSS, unsafe_allow_html=True)
-        st.markdown(_title_css(APP_TITLE), unsafe_allow_html=True)
-        st.session_state[_CSS_INJECTED_FLAG] = True
+    """Streamlit drops any element a run doesn't re-emit -- there is no
+    persistent DOM across reruns, only what the CURRENT script run
+    produces. "Inject ONE CSS block once per run" (polish-1 spec point
+    A.1) means one st.markdown call per run (never split across two
+    calls, which would make Streamlit drop the unclosed tags), not "only
+    on the session's first run ever": a once-per-session guard here was
+    tried and reverted -- it made the stylesheet vanish from the DOM the
+    moment anything else reran the script (a nav click, the 2s fragment
+    tick, a reload), confirmed live (PR #6: no styling after first paint).
+    So AAE_CSS and the title CSS are real Streamlit elements, injected
+    fresh on every run, same as _nav_css (which must always vary with the
+    current selection anyway)."""
+    st.markdown(ui_components.AAE_CSS, unsafe_allow_html=True)
+    st.markdown(_title_css(APP_TITLE), unsafe_allow_html=True)
     st.markdown(_nav_css(current_nav_id), unsafe_allow_html=True)
 
 
@@ -1078,11 +1077,13 @@ def _render_confirm_decision(state: UIState, controller: RunController) -> None:
 # ---------------------------------------------------------------------------
 
 _USE_CASE_PROBLEM = (
-    # Escaped \$ -- a bare "$100 ... $200" is parsed as inline LaTeX math by
-    # st.markdown (caught visually: rendered as a code/math block instead
-    # of plain text).
-    "A customer pays \\$100 once. The gateway re-sends its success callback, "
-    "the store records it twice, and the books show \\$200."
+    # No backslash-escaping: this text renders via labeled_section() into
+    # an HTML block (ui_components.escape()'d, embedded in a <p> through
+    # unsafe_allow_html), not plain st.markdown -- there's no LaTeX-math
+    # parsing here to guard against, and a baked-in "\$" would show up as
+    # a literal backslash in the rendered card instead of a plain "$".
+    "A customer pays $100 once. The gateway re-sends its success callback, "
+    "the store records it twice, and the books show $200."
 )
 _USE_CASE_IMPACT = "Inflated revenue, failed reconciliations, and wrong refunds or orders shipped twice."
 _USE_CASE_MITIGATION = (
