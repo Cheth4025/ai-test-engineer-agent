@@ -972,20 +972,29 @@ def _card_heading(text: str, *, prefix: str = "") -> None:
     st.markdown(f'<p class="aae-card-heading">{prefix_html}{ui_components.escape(text)}</p>', unsafe_allow_html=True)
 
 
-def _render_decision_trace_rows(rows: list[dict]) -> None:
-    """Renders decision_trace.build_decision_trace's own rows verbatim --
-    the Scenarios page's COVERAGE-only card and the Results page's
-    all-checkpoints card both call this on their own (pre-filtered) row
-    list, so there is exactly one place that decides how a row looks."""
-    for row in rows:
-        st.markdown(f"Checkpoint: `{row['checkpoint']}`")
-        st.markdown(f"{row['icon']} Decision: `{row['decision_text']}`")
-        if row["confidence"] is not None:
-            threshold = row["threshold"] if row["threshold"] is not None else "—"
-            st.markdown(f"Confidence: {row['confidence']} vs τ {threshold}")
-        st.markdown(f"Route: {row['route']}")
-        st.markdown(f"Source: `{row['source']}`")
-        st.divider()
+def _approval_trace_row(approval: dict | None) -> dict | None:
+    """A synthetic trace row for the Results page's full checkpoint table:
+    approval.json isn't a Decider decisions.json record at all, so this
+    stays in ui.py, not decision_trace.py. Gets its own dedicated Approved/
+    Rejected outcome pair (reusing the "rejected-guard" pill color, since
+    the token sheet defines none separate for a plain human Reject) rather
+    than reusing "Human confirmed"/"Rejected by guard: ..." -- a Reject
+    isn't a Decider decision a human confirmed, and it isn't a guard
+    rejection either."""
+    if approval is None:
+        return None
+    outcome = "Approved" if approval["decision"] == "APPROVE" else "Rejected"
+    return {
+        "checkpoint": "Approval",
+        "icon": "✅" if approval["decision"] == "APPROVE" else "⛔",
+        "decision_text": f"{approval['decision']} by {approval['reviewer']} at {approval['timestamp']}",
+        "confidence": None,
+        "threshold": None,
+        "route": None,
+        "source": "HUMAN_APPROVAL",
+        "override": False,
+        "outcome": outcome,
+    }
 
 
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
@@ -1215,13 +1224,10 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
 
     if controller is not None:
         trace_rows = pad_not_reached_rows(build_decision_trace(data.get("decisions") or [], _decider_cfg()))
-        with ui_components.widget_card_container("analysis-decision-trace"):
-            # _render_decision_trace_rows (and this card's styling) is
-            # deferred to Commit C5, which replaces it with
-            # decision_trace_table() once decision_trace.py's "outcome"
-            # field exists -- see the polish-1 ledger.
-            _card_heading("Decision trace")
-            _render_decision_trace_rows(trace_rows)
+        st.markdown(
+            ui_components.card("Decision trace", ui_components.decision_trace_table(trace_rows)),
+            unsafe_allow_html=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1421,13 +1427,15 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                     unsafe_allow_html=True,
                 )
         if coverage_rows:
-            # _render_decision_trace_rows (and this card's wrapper/tone)
-            # are deferred to Commit C5, which replaces it with
-            # decision_trace_table() once decision_trace.py's "outcome"
-            # field exists -- see the polish-1 ledger.
-            with decider_col, ui_components.widget_card_container("coverage-decider-trace"):
-                _card_heading("Strands Decider (2B) decision")
-                _render_decision_trace_rows(coverage_rows)
+            with decider_col:
+                st.markdown(
+                    ui_components.card(
+                        "Strands Decider (2B) decision",
+                        ui_components.decision_trace_table(coverage_rows),
+                        tone="decider",
+                    ),
+                    unsafe_allow_html=True,
+                )
 
     with ui_components.widget_card_container("gherkin"):
         _card_heading("Gherkin")
@@ -1715,16 +1723,17 @@ def _render_page_results(state: UIState, data: dict) -> None:
             failure_body = "<p>No failure observed.</p>"
         st.markdown(ui_components.card(heading, failure_body, tone="failure"), unsafe_allow_html=True)
 
-    with decider_col, ui_components.widget_card_container("results-decider-trace"):
-        # _render_decision_trace_rows (and this card's wrapper/tone) are
-        # deferred to Commit C5, which replaces it with
-        # decision_trace_table() once decision_trace.py's "outcome" field
-        # exists -- see the polish-1 ledger.
-        _card_heading("Decider decision trace")
+    with decider_col:
         trace_rows = build_decision_trace(data.get("decisions") or [], _decider_cfg())
-        if not trace_rows:
-            st.markdown(ui_components.small_caption("No decisions recorded."), unsafe_allow_html=True)
-        _render_decision_trace_rows(trace_rows)
+        approval = _load_json(controller.run_dir / "approval.json")
+        approval_row = _approval_trace_row(approval)
+        if approval_row is not None:
+            trace_rows = [*trace_rows, approval_row]
+        if trace_rows:
+            trace_body = ui_components.decision_trace_table(trace_rows)
+        else:
+            trace_body = ui_components.small_caption("No decisions recorded.")
+        st.markdown(ui_components.card("Decider decision trace", trace_body), unsafe_allow_html=True)
 
     if has_failure:
         with ui_components.widget_card_container("evidence"):

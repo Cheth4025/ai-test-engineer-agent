@@ -449,6 +449,7 @@ AAE_CSS = f"""
 }}
 .aae-row--fail {{ background-color: #FFF1F0; font-weight: 700; }}
 .aae-row--added {{ background-color: #EAF6F4; }}
+.aae-row--not-reached {{ color: #9CA7B4; }}
 
 /* -- Pills (generated from PILL_VARIANTS) -- */
 .aae-pill {{
@@ -634,6 +635,58 @@ AAE_CSS = f"""
 }}
 </style>
 """
+
+
+# decision_trace.build_decision_trace's "outcome" field -> this module's
+# pill variant. "Rejected" (a plain human Reject, not a guard rejection --
+# see _approval_trace_row in ui.py) reuses the "rejected-guard" color: the
+# token sheet defines no separate color for it, and both are a failure-
+# toned red: the dedicated wording ("Rejected" vs "Rejected by guard: ...")
+# is what keeps the two conceptually distinct, not the color. Any
+# "Rejected by guard: <reason>" literal (dynamic, never a fixed key here)
+# is matched by prefix in decision_trace_table() below.
+OUTCOME_PILL_VARIANT = {
+    "Auto": "auto",
+    "Human confirmed": "human-confirmed",
+    "Human override": "human-override",
+    "⏳ Waiting": "waiting",
+    "Approved": "approved",
+    "Rejected": "rejected-guard",
+}
+
+
+def decision_trace_table(rows: list[dict]) -> str:
+    """The ONE renderer for decision_trace.build_decision_trace's rows
+    (extended with "outcome"), used identically on Analysis (live,
+    pad_not_reached_rows-padded), Scenarios (COVERAGE-filtered, read-only)
+    and Results (full, plus a synthetic Approval row). Columns: Checkpoint
+    / Decision / Confidence / Outcome -- "Decision" (not "Decider
+    suggested") because decision_text is the real field available (full
+    prose: the human-override/escalated-by-other-question wording), not a
+    separate raw-suggestion-only field."""
+    headers = ["Checkpoint", "Decision", "Confidence", "Outcome"]
+    table_rows = []
+    row_classes = []
+    for row in rows:
+        checkpoint_cell = escape(row["checkpoint"] or "—")
+        decision_cell = escape(row["decision_text"] or "—")
+        if row["confidence"] is not None and row["threshold"] is not None:
+            confidence_cell = conf_bar(row["confidence"], row["threshold"])
+        else:
+            confidence_cell = "—"
+
+        outcome = row["outcome"]
+        if outcome == "not reached":
+            outcome_cell = escape(outcome)
+        else:
+            variant = OUTCOME_PILL_VARIANT.get(outcome)
+            if variant is None and outcome.startswith("Rejected by guard"):
+                variant = "rejected-guard"
+            outcome_cell = pill(outcome, variant) if variant else escape(outcome)
+
+        table_rows.append([checkpoint_cell, decision_cell, confidence_cell, outcome_cell])
+        row_classes.append("aae-row--not-reached" if outcome == "not reached" else "")
+    return table(headers, table_rows, row_classes=row_classes)
 
 
 def widget_card_container(name: str):

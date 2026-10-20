@@ -395,3 +395,74 @@ def test_aae_css_contains_core_component_classes():
 
 def test_aae_css_has_no_aite_prefixed_classes():
     assert "aite-" not in uc.AAE_CSS
+
+
+# ---------------------------------------------------------------------------
+# decision_trace_table() -- the ONE renderer for decision_trace.
+# build_decision_trace's (outcome-extended) rows, used on Analysis/
+# Scenarios/Results. Consumes real row dicts shaped like decision_trace.py
+# produces, so these tests build them inline (same shape, no import of
+# decision_trace itself -- ui_components must stay decision_trace-agnostic).
+# ---------------------------------------------------------------------------
+
+
+def _row(checkpoint, decision_text, confidence, threshold, outcome):
+    return {
+        "checkpoint": checkpoint, "icon": "✅", "decision_text": decision_text,
+        "confidence": confidence, "threshold": threshold, "route": "AUTO",
+        "source": "DECIDER", "override": False, "outcome": outcome,
+    }
+
+
+def test_decision_trace_table_renders_checkpoint_and_decision_text():
+    rows = [_row("COVERAGE", "ACCEPT_COVERAGE", 0.97, 0.75, "Auto")]
+    result = uc.decision_trace_table(rows)
+    assert "COVERAGE" in result
+    assert "ACCEPT_COVERAGE" in result
+    assert "aae-table" in result
+
+
+def test_decision_trace_table_renders_confidence_bar_when_present():
+    rows = [_row("COVERAGE", "ACCEPT_COVERAGE", 0.97, 0.75, "Auto")]
+    result = uc.decision_trace_table(rows)
+    assert "aae-conf-bar" in result
+    assert "0.97" in result
+
+
+def test_decision_trace_table_shows_dash_when_no_confidence():
+    rows = [_row("COMPLETION", "not reached", None, None, "not reached")]
+    result = uc.decision_trace_table(rows)
+    assert "aae-conf-bar" not in result
+
+
+@pytest.mark.parametrize(
+    "outcome,variant",
+    [
+        ("Auto", "auto"),
+        ("Human confirmed", "human-confirmed"),
+        ("Human override", "human-override"),
+        ("⏳ Waiting", "waiting"),
+        ("Approved", "approved"),
+        ("Rejected", "rejected-guard"),
+        ("Rejected by guard: 5/5 required", "rejected-guard"),
+    ],
+)
+def test_decision_trace_table_maps_outcome_to_pill_variant(outcome, variant):
+    rows = [_row("COVERAGE", "x", 0.9, 0.75, outcome)]
+    result = uc.decision_trace_table(rows)
+    assert f"aae-pill--{variant}" in result
+    assert outcome in result
+
+
+def test_decision_trace_table_not_reached_is_plain_text_not_a_pill():
+    rows = [_row("COMPLETION", "not reached", None, None, "not reached")]
+    result = uc.decision_trace_table(rows)
+    assert "not reached" in result
+    assert "aae-pill" not in result
+
+
+def test_decision_trace_table_escapes_checkpoint_and_decision_text():
+    rows = [_row(UNSAFE_TEXT, UNSAFE_TEXT, None, None, "Auto")]
+    result = uc.decision_trace_table(rows)
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result

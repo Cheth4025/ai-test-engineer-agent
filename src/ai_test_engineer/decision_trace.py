@@ -101,6 +101,32 @@ def decider_decision_value(record: dict) -> str:
     return "Awaiting human"
 
 
+OUTCOME_AUTO = "Auto"
+OUTCOME_HUMAN_CONFIRMED = "Human confirmed"
+OUTCOME_HUMAN_OVERRIDE = "Human override"
+OUTCOME_WAITING = "⏳ Waiting"
+# "Rejected by guard: <reason>" stays a dynamic f-string, not a fixed
+# literal -- it always carries the real reason. "not reached" is produced
+# only by pad_not_reached_rows, never by _outcome_for itself.
+
+
+def _outcome_for(base_record: dict, human_record: dict | None, override: bool) -> str:
+    """The short pill-ready outcome literal for one row -- a separate,
+    stable vocabulary from decision_text (which stays free-form prose: the
+    override suffix, the "(human)" marker, the escalated-by-other-question
+    suffix). Mirrors decider_decision_value's own classification so the two
+    can never independently drift for the same record."""
+    if base_record.get("decision_status") == "REJECTED":
+        return f"Rejected by guard: {base_record.get('rejection_reason') or 'deterministic guard'}"
+    if human_record is None and decider_decision_value(base_record) == "Awaiting human":
+        return OUTCOME_WAITING
+    if human_record is not None:
+        return OUTCOME_HUMAN_OVERRIDE if override else OUTCOME_HUMAN_CONFIRMED
+    return OUTCOME_AUTO  # AUTO/REUSED standalone, or a DECIDER record whose
+    # own primary question resolved automatically even though the batch
+    # escalated overall (see _emit's "escalated by other question" suffix)
+
+
 def decision_icon(record: dict) -> str:
     """⏳ while a decision is still awaiting a human, ✅ once it's answered
     or auto-resolved, ⛔ when a human's answer was rejected by a guard --
@@ -128,9 +154,11 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
     "Awaiting human" -- never a stale one left behind after it WAS answered.
 
     Returns one dict per row: checkpoint, icon, decision_text (already
-    carries the "(human)"/"Rejected by guard"/override wording -- callers
-    render it as-is, no further interpretation), confidence, threshold,
-    route, source, override (bool).
+    carries the "(human)"/"Rejected by guard"/override/escalated-by-other-
+    question wording -- callers render it as-is, no further
+    interpretation), confidence, threshold, route, source, override (bool),
+    outcome (a short, stable pill-ready literal -- see OUTCOME_* and
+    _outcome_for).
     """
     rows: list[dict] = []
     pending: dict[str, dict] = {}
@@ -151,6 +179,20 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
             if suggestion is not None and human_choice is not None and suggestion != human_choice:
                 override = True
                 decision_text = f"{decision_text}, override of Decider's {suggestion!r} suggestion"
+        # A DECIDER record whose own PRIMARY question resolved AUTO (a real
+        # answer, not "Awaiting human") yet whose overall route is still
+        # ESCALATED: some OTHER question in the batch (a grounding/ambiguity
+        # noul) needed a human, resolved via a different control entirely
+        # (e.g. rule-match resolution) -- never a HUMAN_ESCALATION record
+        # for THIS checkpoint, so human_record is None here.
+        if (
+            decider_record is not None
+            and human_record is None
+            and primary is not None
+            and primary.get("answer") is not None
+            and base_record.get("route") == "ESCALATED"
+        ):
+            decision_text = f"{decision_text} (escalated by rule-match/ambiguity questions)"
         rows.append(
             {
                 "checkpoint": base_record.get("checkpoint"),
@@ -161,6 +203,7 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
                 "route": base_record.get("route"),
                 "source": base_record.get("decision_source"),
                 "override": override,
+                "outcome": _outcome_for(base_record, human_record, override),
             }
         )
 
@@ -208,6 +251,7 @@ def pad_not_reached_rows(rows: list[dict]) -> list[dict]:
             "route": None,
             "source": None,
             "override": False,
+            "outcome": "not reached",
         }
         for checkpoint in ALL_CHECKPOINTS
         if checkpoint not in seen

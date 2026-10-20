@@ -136,6 +136,18 @@ def test_decision_trace_rows(controller):
     assert "REPORT_FAILURE (human)" in report["report_text"]
 
 
+def test_decision_trace_table_has_outcome_column(controller):
+    _write(controller, "results.json", RESULTS_DEFECT_ON)
+    _write(controller, "decisions.json", DECISIONS)
+
+    report = reporting.render_report(controller)
+    text = report["report_text"]
+
+    assert "| Checkpoint | Decision | Confidence vs τ | Outcome | Route | Source |" in text
+    assert "| COVERAGE | ✅ ACCEPT_COVERAGE | 0.4242 vs 0.75 | Auto | AUTO | DECIDER |" in text
+    assert "| FAILURE | ✅ REPORT_FAILURE (human) | — | Human confirmed | ESCALATED | HUMAN_ESCALATION |" in text
+
+
 def test_approval_block(controller):
     _write(controller, "results.json", RESULTS_DEFECT_ON)
     _write(controller, "approval.json", APPROVAL)
@@ -249,7 +261,31 @@ def test_report_decision_trace_equals_build_decision_trace_output_directly(contr
 
     for row in expected_rows:
         assert f"{row['icon']} {row['decision_text']}" in report["report_text"]
+        assert row["outcome"] in report["report_text"]
         if row["confidence"] is not None:
             assert f"{row['confidence']} vs {row['threshold']}" in report["report_text"]
+
+
+def test_report_trace_outcome_equals_ui_trace_outcome(controller):
+    """The strongest form of 'report trace == UI trace' (plan item 5's own
+    verification bullet): the SAME rows, rendered by report.md's markdown
+    table and by ui_components.decision_trace_table's HTML table, must
+    carry the identical outcome value per checkpoint -- never a value
+    that's right in one surface and stale/different in the other."""
+    from ai_test_engineer import ui_components
+
+    _write(controller, "results.json", RESULTS_DEFECT_ON)
+    _write(controller, "decisions.json", DECISIONS)
+    decider_cfg = json.loads((reporting.CONFIG_DIR / "decider.json").read_text())
+
+    rows = decision_trace.build_decision_trace(DECISIONS, decider_cfg)
+    report_text = reporting.render_report(controller)["report_text"]
+    ui_html = ui_components.decision_trace_table(rows)
+
+    for row in rows:
+        checkpoint, outcome = row["checkpoint"], row["outcome"]
+        report_row_line = next(line for line in report_text.splitlines() if line.startswith(f"| {checkpoint} |"))
+        assert outcome in report_row_line
+        assert outcome in ui_html
 
 
