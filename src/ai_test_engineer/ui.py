@@ -1132,9 +1132,9 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
     br_rows = [
         [ui_components.escape(r["rule_id"]), ui_components.escape(r["label"]), ui_components.escape(r["description"])] for r in rules
     ]
-    br_body = ui_components.table(["ID", "Rule", "Description"], br_rows) + ui_components.small_caption(
-        "Loaded from the requirements catalog — wording follows the source file."
-    )
+    br_body = ui_components.table(
+        ["ID", "Rule", "Description"], br_rows, col_widths=["44px", None, None]
+    ) + ui_components.small_caption("Loaded from the requirements catalog — wording follows the source file.")
     st.markdown(ui_components.card("Business rules (BR01 – BR06)", br_body), unsafe_allow_html=True)
 
     col3, col4 = st.columns(2)
@@ -1336,7 +1336,12 @@ def _render_scenarios_table(scenarios: list[dict], grounding_items: dict, added_
         )
         row_classes.append("aae-row--added" if scenario_id in added_ids else "")
     st.markdown(
-        ui_components.table(["ID", "Scenario", "Rules", "Rule match"], rows, row_classes=row_classes),
+        ui_components.table(
+            ["ID", "Scenario", "Rules", "Rule match"],
+            rows,
+            row_classes=row_classes,
+            col_widths=["44px", None, "150px", None],
+        ),
         unsafe_allow_html=True,
     )
 
@@ -1501,7 +1506,9 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                     ui_components.escape(", ".join(test.get("rule_ids", []))),
                 ]
             )
-        manifest_body = ui_components.table(["ID", "Scenario", "Expected", "Rules"], rows)
+        manifest_body = ui_components.table(
+            ["ID", "Scenario", "Expected", "Rules"], rows, col_widths=["44px", None, None, "150px"]
+        )
         if shared:
             manifest_body += ui_components.small_caption(
                 "All tests also check: " + ", ".join(format_assertion(a) for a in shared) + "."
@@ -1646,7 +1653,9 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             row_classes = ["aae-row--fail" if t["status"] == "FAIL" else "" for t in tests]
             body = ui_components.small_caption(
                 f"{len(tests)}/{len(tests)} run · {passed} passed · {failed} failed · {duration_s}s"
-            ) + ui_components.table(["ID", "Scenario", "Result"], rows, row_classes=row_classes)
+            ) + ui_components.table(
+                ["ID", "Scenario", "Result"], rows, row_classes=row_classes, col_widths=["44px", None, None]
+            )
         st.markdown(ui_components.card("Test run", body), unsafe_allow_html=True)
     with log_col:
         log_path = controller.run_dir / "execution" / "pytest_output.log" if controller is not None else None
@@ -1724,7 +1733,10 @@ def _render_page_results(state: UIState, data: dict) -> None:
     ]
     results_row_classes = ["aae-row--fail" if t["status"] == "FAIL" else "" for t in tests]
     results_body = ui_components.table(
-        ["ID", "Scenario", "Expected", "Actual", "Status"], results_rows, row_classes=results_row_classes
+        ["ID", "Scenario", "Expected", "Actual", "Status"],
+        results_rows,
+        row_classes=results_row_classes,
+        col_widths=["44px", None, None, None, None],
     ) + ui_components.small_caption("Actual values are recorded by each test, never copied from Expected.")
     st.markdown(ui_components.card("Test results", results_body), unsafe_allow_html=True)
 

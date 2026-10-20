@@ -138,6 +138,24 @@ def test_table_row_classes_length_mismatch_raises():
         uc.table(["ID"], [["T01"], ["T04"]], row_classes=["only-one"])
 
 
+def test_table_col_widths_renders_colgroup():
+    result = uc.table(["ID", "Scenario", "Rules"], [["T01", "x", "BR01, BR02"]], col_widths=["44px", None, "150px"])
+    assert result.startswith('<table class="aae-table">')
+    assert '<colgroup><col style="width:44px;"><col><col style="width:150px;"></colgroup>' in result
+    # colgroup must come before the real rendered content, not replace it.
+    assert "T01" in result and "BR01, BR02" in result
+
+
+def test_table_col_widths_length_mismatch_raises():
+    with pytest.raises(ValueError):
+        uc.table(["ID", "Scenario"], [["T01", "x"]], col_widths=["44px"])
+
+
+def test_table_without_col_widths_has_no_colgroup():
+    result = uc.table(["ID"], [["T01"]])
+    assert "<colgroup>" not in result
+
+
 # ---------------------------------------------------------------------------
 # kpi_row()
 # ---------------------------------------------------------------------------
@@ -403,6 +421,43 @@ def test_aae_css_contains_core_component_classes():
         ".aae-progress", ".aae-conf-bar", ".aae-nav-badge", ".aae-caption",
     ):
         assert selector in uc.AAE_CSS
+
+
+def test_aae_css_base_typography_is_13px_145_everywhere():
+    # Card paragraphs, lists, captions, and widget labels all share one
+    # base size/line-height -- nothing should fall through to Streamlit's
+    # default 16px.
+    assert 'font-size: 13px !important;\n    line-height: 1.45 !important;' in uc.AAE_CSS
+    assert '[data-testid="stWidgetLabel"]' in uc.AAE_CSS
+    assert "stMarkdownContainer\"] li " in uc.AAE_CSS or 'stMarkdownContainer"] li {' in uc.AAE_CSS
+
+
+def test_aae_css_table_rules_use_important_and_higher_specificity():
+    # Streamlit's own markdown-table CSS otherwise wins the cascade --
+    # raised specificity ([data-testid="stMarkdownContainer"] .aae-table)
+    # plus !important on size/spacing is what makes ours win.
+    assert '[data-testid="stMarkdownContainer"] .aae-table {' in uc.AAE_CSS
+    assert '[data-testid="stMarkdownContainer"] .aae-table th {' in uc.AAE_CSS
+    assert '[data-testid="stMarkdownContainer"] .aae-table td {' in uc.AAE_CSS
+    assert "font-size: 12.5px !important;\n    line-height: 1.35 !important;" in uc.AAE_CSS
+
+
+def test_aae_css_vertical_and_horizontal_card_gap_both_16px():
+    assert '[data-testid="stVerticalBlock"] {\n    gap: 16px !important;' in uc.AAE_CSS
+    assert '[data-testid="stHorizontalBlock"] {\n    gap: 16px !important;' in uc.AAE_CSS
+
+
+def test_aae_css_zeroes_stmarkdowncontainer_negative_margin():
+    # Streamlit's own stMarkdownContainer carries a built-in
+    # margin-bottom: -16px (confirmed live via getComputedStyle) meant to
+    # counteract plain markdown's native paragraph spacing -- for our
+    # custom unsafe_allow_html cards it has nothing to counteract, so it
+    # silently eats 16px off the flex-column ancestor's auto-height,
+    # making the real [data-testid="stVerticalBlock"] gap invisible
+    # (cards touched with 0px visible gap even though the gap rule itself
+    # was correctly 16px). Without this override, two stacked cards
+    # measure 0px apart live.
+    assert '[data-testid="stMarkdownContainer"] {\n    margin-bottom: 0 !important;' in uc.AAE_CSS
 
 
 def test_aae_css_has_no_aite_prefixed_classes():

@@ -105,14 +105,36 @@ def card(heading: str, body_html: str, *, tone: str = "default") -> str:
     )
 
 
-def table(headers: list[str], rows: list[list[str]], *, row_classes: list[str] | None = None) -> str:
+def table(
+    headers: list[str],
+    rows: list[list[str]],
+    *,
+    row_classes: list[str] | None = None,
+    col_widths: list[str | None] | None = None,
+) -> str:
     """headers are leaf/plain text (escaped internally, since they're
     always short literal column titles). Each row cell is PRE-BUILT HTML
     the caller assembled (e.g. html.escape(plain_value) or pill(...)) --
-    NOT escaped again here, so a cell can embed a pill badge."""
+    NOT escaped again here, so a cell can embed a pill badge.
+
+    col_widths, when given, is one CSS width string (or None for "let the
+    browser size it") per column, in header order -- rendered as a
+    <colgroup> so a specific column (e.g. a short "ID" column) can be
+    pinned narrow without constraining every other column in every other
+    table that shares .aae-table (tables differ in which column, if any,
+    needs a fixed width -- there's no reliable way to target "the ID
+    column" generically across tables via CSS alone, since column meaning
+    and position both vary table to table)."""
     if row_classes is not None and len(row_classes) != len(rows):
         raise ValueError(f"row_classes length {len(row_classes)} != rows length {len(rows)}")
     classes = row_classes if row_classes is not None else [""] * len(rows)
+    if col_widths is not None and len(col_widths) != len(headers):
+        raise ValueError(f"col_widths length {len(col_widths)} != headers length {len(headers)}")
+
+    colgroup = ""
+    if col_widths is not None:
+        cols = "".join(f'<col style="width:{width};">' if width else "<col>" for width in col_widths)
+        colgroup = f"<colgroup>{cols}</colgroup>"
 
     thead = "".join(f"<th>{escape(h)}</th>" for h in headers)
     body_rows = []
@@ -122,6 +144,7 @@ def table(headers: list[str], rows: list[list[str]], *, row_classes: list[str] |
         body_rows.append(f"<tr{class_attr}>{tds}</tr>")
     return (
         '<table class="aae-table">'
+        f"{colgroup}"
         f"<thead><tr>{thead}</tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody>"
         "</table>"
@@ -299,10 +322,47 @@ AAE_CSS = f"""
     padding: 10px 20px;
 }}
 
-/* -- Base text -- */
+/* Streamlit's own stMarkdownContainer carries a built-in margin-bottom:
+   -16px (confirmed live via getComputedStyle -- presumably there to
+   counteract a plain markdown paragraph's native bottom margin elsewhere
+   in Streamlit's own default styling). For OUR custom unsafe_allow_html
+   cards that margin has nothing to counteract, so it just eats 16px off
+   the flex-column ancestor's auto-height for this element -- the parent
+   [data-testid="stVerticalBlock"]'s own 16px gap (set below) is real and
+   correct between elements, but a markdown block that's 16px "shorter"
+   than its own visible content spills that content down into the next
+   element's gap with overflow:visible, so stacked cards looked like they
+   had no gap at all. Zeroing it here removes the phantom shrink. -- */
+.block-container [data-testid="stMarkdownContainer"] {{
+    margin-bottom: 0 !important;
+}}
+
+/* -- Base text: one 13px/1.45 size for every piece of body text in the
+   main area -- card paragraphs, lists, captions, and widget labels alike.
+   Nothing in a card should fall through to Streamlit's default 16px. -- */
 .block-container [data-testid="stMarkdownContainer"] p:not(.aae-card-heading) {{
     font-size: 13px !important;
-    line-height: 1.5 !important;
+    line-height: 1.45 !important;
+}}
+.block-container [data-testid="stMarkdownContainer"] ul,
+.block-container [data-testid="stMarkdownContainer"] ol {{
+    font-size: 13px !important;
+    line-height: 1.45 !important;
+    padding-left: 18px !important;
+    margin: 0 !important;
+}}
+.block-container [data-testid="stMarkdownContainer"] li {{
+    font-size: 13px !important;
+    line-height: 1.45 !important;
+    margin-bottom: 4px !important;
+}}
+.block-container [data-testid="stMarkdownContainer"] li:last-child {{
+    margin-bottom: 0 !important;
+}}
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p {{
+    font-size: 13px !important;
+    line-height: 1.45 !important;
 }}
 
 /* -- Status chips (top bar) -- */
@@ -371,7 +431,8 @@ AAE_CSS = f"""
     color: #0F1B2D !important;
 }}
 [data-testid="stCaptionContainer"] p {{
-    font-size: 14px !important;
+    font-size: 13px !important;
+    line-height: 1.45 !important;
     color: #4A5868 !important;
 }}
 .aae-caption {{
@@ -437,23 +498,34 @@ AAE_CSS = f"""
 .aae-label-mitigation {{ color: #0B766C; }}
 .aae-label-body {{ margin: 2px 0 10px 0 !important; }}
 
-/* -- Table -- */
-.aae-table {{
+/* -- Table -- raised specificity ([data-testid="stMarkdownContainer"]
+   .aae-table ...) plus !important on size/spacing: Streamlit's own
+   markdown-table styles otherwise win the cascade (same specificity,
+   their stylesheet loads first but their rules are more specific in
+   practice), leaving rows tall and spread out instead of the token
+   values. -- */
+.block-container [data-testid="stMarkdownContainer"] .aae-table {{
     width: 100%;
-    font-size: 12.5px;
+    font-size: 12.5px !important;
+    line-height: 1.35 !important;
     border-collapse: collapse;
+    table-layout: auto;
 }}
-.aae-table th {{
+.block-container [data-testid="stMarkdownContainer"] .aae-table th {{
     background-color: #F0F3F7;
     color: #3A4757;
-    font-weight: 600;
+    font-weight: 600 !important;
     text-align: left;
-    padding: 8px 9px;
+    padding: 8px 9px !important;
     border-bottom: 1px solid #DDE3EA;
+    font-size: 12.5px !important;
+    line-height: 1.35 !important;
 }}
-.aae-table td {{
-    padding: 8px 9px;
+.block-container [data-testid="stMarkdownContainer"] .aae-table td {{
+    padding: 8px 9px !important;
     border-bottom: 1px solid #EEF1F5;
+    font-size: 12.5px !important;
+    line-height: 1.35 !important;
 }}
 .aae-row--fail {{ background-color: #FFF1F0; font-weight: 700; }}
 .aae-row--added {{ background-color: #EAF6F4; }}
@@ -635,11 +707,15 @@ AAE_CSS = f"""
     padding: 24px 28px !important;
     max-width: 100% !important;
 }}
-[data-testid="stVerticalBlock"] {{
-    gap: 14px !important;
-}}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
-    gap: 6px !important;
+/* 16px everywhere a card can stack vertically, matching the horizontal
+   16px between columns -- cards were touching with no gap at the old
+   14px value (not effectively applying to full-width stacked cards);
+   .block-container-scoped for the same specificity reasoning as the
+   table fix above. The sidebar's own tighter nav-list gap (set earlier,
+   in the Sidebar section) still wins there via its more specific
+   selector. */
+.block-container [data-testid="stVerticalBlock"] {{
+    gap: 16px !important;
 }}
 </style>
 """
