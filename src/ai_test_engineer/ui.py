@@ -799,9 +799,22 @@ def _nav_css(current_nav_id: str) -> str:
     """
 
 
+_CSS_INJECTED_FLAG = "aae_static_css_injected"
+
+
 def _inject_css(current_nav_id: str) -> None:
-    st.markdown(ui_components.AAE_CSS, unsafe_allow_html=True)
-    st.markdown(_title_css(APP_TITLE), unsafe_allow_html=True)
+    """The static stylesheet (AAE_CSS, ~700 lines, plus the APP_TITLE
+    pseudo-element) is injected exactly once per browser session, not on
+    every st.fragment(run_every=2) tick -- re-sending and re-parsing the
+    same unchanging CSS every 2 seconds for the life of the session was
+    wasted bytes/DOM churn with no benefit. Session-scoped (not
+    module/process-scoped): a fresh browser session always gets the CSS
+    on its first render. _nav_css is the one part that genuinely changes
+    (which nav button is highlighted), so it's re-injected every tick."""
+    if not st.session_state.get(_CSS_INJECTED_FLAG, False):
+        st.markdown(ui_components.AAE_CSS, unsafe_allow_html=True)
+        st.markdown(_title_css(APP_TITLE), unsafe_allow_html=True)
+        st.session_state[_CSS_INJECTED_FLAG] = True
     st.markdown(_nav_css(current_nav_id), unsafe_allow_html=True)
 
 
@@ -1164,8 +1177,8 @@ def _render_rule_match_rows(state: UIState, controller: RunController, selected_
             cols[2].markdown("Decider: review needed")
             with cols[3]:
                 button_cols = st.columns(2)
-                matches_clicked = button_cols[0].form_submit_button("Matches")
-                no_match_clicked = button_cols[1].form_submit_button("No match")
+                matches_clicked = button_cols[0].form_submit_button("Matches", disabled=state.worker_busy)
+                no_match_clicked = button_cols[1].form_submit_button("No match", disabled=state.worker_busy)
             with st.expander("Note (optional)"):
                 note = st.text_input("Note", key=f"note_{selected_version}_{scenario_id}", label_visibility="collapsed")
             if matches_clicked or no_match_clicked:

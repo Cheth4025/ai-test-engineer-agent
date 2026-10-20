@@ -49,6 +49,14 @@ PILL_VARIANTS: dict[str, tuple[str, str]] = {
     "waiting": ("#FFF1D6", "#7A4D00"),
     "rejected-guard": ("#FDECEA", "#B42318"),
     "approved": ("#DCF3E4", "#11602E"),
+    # Not in the original token sheet (which only names PASS/FAIL), but
+    # execution.py's _parse_junit records ERROR (a fixture/setup
+    # exception, <error> node) and SKIPPED (<skipped> node) as real test
+    # statuses -- the Execution/Results Result columns need a variant for
+    # every value that can actually appear, not just the two happy-path
+    # ones, or pill() raises and takes the whole page down.
+    "error": ("#FFF1D6", "#7A4D00"),  # reuses the "waiting" amber -- distinct from a plain assertion FAIL
+    "skipped": ("#F0F3F7", "#3A4757"),  # neutral grey, same tone as a table header
 }
 
 _CARD_TONES = {"default", "gap", "decider", "failure"}
@@ -638,13 +646,15 @@ AAE_CSS = f"""
 
 
 # decision_trace.build_decision_trace's "outcome" field -> this module's
-# pill variant. "Rejected" (a plain human Reject, not a guard rejection --
-# see _approval_trace_row in ui.py) reuses the "rejected-guard" color: the
-# token sheet defines no separate color for it, and both are a failure-
-# toned red: the dedicated wording ("Rejected" vs "Rejected by guard: ...")
-# is what keeps the two conceptually distinct, not the color. Any
-# "Rejected by guard: <reason>" literal (dynamic, never a fixed key here)
-# is matched by prefix in decision_trace_table() below.
+# pill variant. outcome is always one of these exact fixed literals (or
+# "not reached", handled separately below) -- a plain dict lookup, no
+# prefix-matching needed: decision_trace.py keeps the dynamic rejection
+# reason in decision_text only, never embedded into outcome. "Rejected"
+# (a plain human Reject, not a guard rejection -- see _approval_trace_row
+# in ui.py) reuses the "rejected-guard" color: the token sheet defines no
+# separate color for it, and both are a failure-toned red -- the dedicated
+# wording ("Rejected" vs "Rejected by guard") is what keeps the two
+# conceptually distinct, not the color.
 OUTCOME_PILL_VARIANT = {
     "Auto": "auto",
     "Human confirmed": "human-confirmed",
@@ -652,6 +662,7 @@ OUTCOME_PILL_VARIANT = {
     "⏳ Waiting": "waiting",
     "Approved": "approved",
     "Rejected": "rejected-guard",
+    "Rejected by guard": "rejected-guard",
 }
 
 
@@ -680,8 +691,6 @@ def decision_trace_table(rows: list[dict]) -> str:
             outcome_cell = escape(outcome)
         else:
             variant = OUTCOME_PILL_VARIANT.get(outcome)
-            if variant is None and outcome.startswith("Rejected by guard"):
-                variant = "rejected-guard"
             outcome_cell = pill(outcome, variant) if variant else escape(outcome)
 
         table_rows.append([checkpoint_cell, decision_cell, confidence_cell, outcome_cell])

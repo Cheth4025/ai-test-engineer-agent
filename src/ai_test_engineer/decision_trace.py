@@ -105,20 +105,30 @@ OUTCOME_AUTO = "Auto"
 OUTCOME_HUMAN_CONFIRMED = "Human confirmed"
 OUTCOME_HUMAN_OVERRIDE = "Human override"
 OUTCOME_WAITING = "⏳ Waiting"
-# "Rejected by guard: <reason>" stays a dynamic f-string, not a fixed
-# literal -- it always carries the real reason. "not reached" is produced
-# only by pad_not_reached_rows, never by _outcome_for itself.
+# A fixed literal, not a dynamic f-string: the real rejection reason lives
+# only in decision_text (decider_decision_value's own "Rejected by guard:
+# <reason>" string), never duplicated into outcome -- outcome stays a
+# small, stable, pill-ready vocabulary a renderer can match by exact
+# lookup, with no prefix-matching glue needed for a value that could
+# otherwise carry arbitrary runtime text. "not reached" is produced only
+# by pad_not_reached_rows, never by _outcome_for itself.
+OUTCOME_REJECTED_BY_GUARD = "Rejected by guard"
 
 
-def _outcome_for(base_record: dict, human_record: dict | None, override: bool) -> str:
+def _outcome_for(base_record: dict, human_record: dict | None, override: bool, *, still_waiting: bool) -> str:
     """The short pill-ready outcome literal for one row -- a separate,
     stable vocabulary from decision_text (which stays free-form prose: the
     override suffix, the "(human)" marker, the escalated-by-other-question
-    suffix). Mirrors decider_decision_value's own classification so the two
-    can never independently drift for the same record."""
+    suffix, the real rejection reason).
+
+    still_waiting is computed by the caller (_emit), which already knows
+    structurally whether this row is the genuinely-still-paused case --
+    re-deriving it here via a string match against decider_decision_value's
+    "Awaiting human" prose would couple this stable enum to wording that's
+    free to change independently."""
     if base_record.get("decision_status") == "REJECTED":
-        return f"Rejected by guard: {base_record.get('rejection_reason') or 'deterministic guard'}"
-    if human_record is None and decider_decision_value(base_record) == "Awaiting human":
+        return OUTCOME_REJECTED_BY_GUARD
+    if still_waiting:
         return OUTCOME_WAITING
     if human_record is not None:
         return OUTCOME_HUMAN_OVERRIDE if override else OUTCOME_HUMAN_CONFIRMED
@@ -193,6 +203,16 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
             and base_record.get("route") == "ESCALATED"
         ):
             decision_text = f"{decision_text} (escalated by rule-match/ambiguity questions)"
+        # Genuinely still paused on this exact question: a decider_record
+        # with no pairing human answer, whose own primary choice question
+        # is itself unanswered (as opposed to the escalated-by-other-
+        # question case just above, where primary DID answer). Computed
+        # here, not re-derived from decider_decision_value's prose, so
+        # _outcome_for's WAITING classification can never drift from what
+        # this function already knows structurally about the record.
+        still_waiting = decider_record is not None and human_record is None and (
+            primary is None or primary.get("answer") is None
+        )
         rows.append(
             {
                 "checkpoint": base_record.get("checkpoint"),
@@ -203,7 +223,7 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
                 "route": base_record.get("route"),
                 "source": base_record.get("decision_source"),
                 "override": override,
-                "outcome": _outcome_for(base_record, human_record, override),
+                "outcome": _outcome_for(base_record, human_record, override, still_waiting=still_waiting),
             }
         )
 

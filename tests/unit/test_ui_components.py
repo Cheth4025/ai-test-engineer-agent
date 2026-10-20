@@ -57,6 +57,18 @@ def test_pill_every_token_sheet_variant_has_colors():
         assert fg.startswith("#")
 
 
+def test_pill_supports_every_real_junit_test_status():
+    # execution.py's _parse_junit produces PASS/FAIL/ERROR/SKIPPED (a
+    # <error> node for a fixture/setup exception, a <skipped> node for a
+    # skipped test) -- the Execution/Results "Result"/"Status" columns
+    # call pill(status, status.lower()) for whatever status a real run
+    # actually recorded, so every one of the four must be a real variant,
+    # not just pass/fail (a crash here used to take down the whole page).
+    for status in ("PASS", "FAIL", "ERROR", "SKIPPED"):
+        result = uc.pill(status, status.lower())
+        assert status in result
+
+
 # ---------------------------------------------------------------------------
 # card()
 # ---------------------------------------------------------------------------
@@ -444,7 +456,10 @@ def test_decision_trace_table_shows_dash_when_no_confidence():
         ("⏳ Waiting", "waiting"),
         ("Approved", "approved"),
         ("Rejected", "rejected-guard"),
-        ("Rejected by guard: 5/5 required", "rejected-guard"),
+        # Fixed literal (no embedded reason) -- outcome is a stable, exact-
+        # match vocabulary; the real rejection reason lives only in
+        # decision_text, never duplicated into outcome.
+        ("Rejected by guard", "rejected-guard"),
     ],
 )
 def test_decision_trace_table_maps_outcome_to_pill_variant(outcome, variant):
@@ -452,6 +467,15 @@ def test_decision_trace_table_maps_outcome_to_pill_variant(outcome, variant):
     result = uc.decision_trace_table(rows)
     assert f"aae-pill--{variant}" in result
     assert outcome in result
+
+
+def test_decision_trace_table_has_no_prefix_matching_for_unknown_outcomes():
+    """outcome is now always an exact fixed literal (or "not reached") --
+    an unrecognized value (e.g. a stray dynamic string) falls through to
+    plain escaped text, never a guessed-at pill variant."""
+    rows = [_row("COVERAGE", "x", 0.9, 0.75, "Rejected by guard: some reason that should not appear here")]
+    result = uc.decision_trace_table(rows)
+    assert "aae-pill" not in result
 
 
 def test_decision_trace_table_not_reached_is_plain_text_not_a_pill():

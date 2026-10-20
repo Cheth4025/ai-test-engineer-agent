@@ -156,7 +156,9 @@ def test_rejected_then_retried_pick_both_pair_with_same_decider_suggestion():
     assert len(rows) == 2
     assert rows[0]["decision_text"] == "Rejected by guard: 5/5 required"
     assert rows[0]["confidence"] == 0.62  # same original Decider confidence
-    assert rows[0]["outcome"] == "Rejected by guard: 5/5 required"
+    # outcome is a fixed, stable literal -- the dynamic reason stays in
+    # decision_text only (asserted above), never duplicated into outcome.
+    assert rows[0]["outcome"] == decision_trace.OUTCOME_REJECTED_BY_GUARD
     assert rows[1]["decision_text"].startswith("REMEDIATE_GAP")
     assert rows[1]["confidence"] == 0.62
     assert rows[1]["outcome"] == decision_trace.OUTCOME_HUMAN_CONFIRMED
@@ -198,7 +200,20 @@ def test_rejected_pick_is_never_marked_as_an_override():
     rows = decision_trace.build_decision_trace([decider, rejected], DECIDER_CFG)
 
     assert rows[0]["override"] is False
-    assert rows[0]["outcome"] == "Rejected by guard: 5/5 required"
+    assert rows[0]["outcome"] == decision_trace.OUTCOME_REJECTED_BY_GUARD
+
+
+def test_rejected_outcome_is_a_fixed_literal_regardless_of_the_real_reason():
+    """outcome must stay a small, stable pill-ready vocabulary -- the
+    dynamic rejection_reason text lives only in decision_text, never
+    embedded into outcome (two different real reasons still produce the
+    identical outcome literal)."""
+    for reason in ("5/5 required", "a completely different guard reason"):
+        decider = _escalated_record("COVERAGE", "coverage_action", "REMEDIATE_GAP", 0.62)
+        rejected = _human_record("COVERAGE", "ACCEPT_COVERAGE", status="REJECTED", rejection_reason=reason)
+        rows = decision_trace.build_decision_trace([decider, rejected], DECIDER_CFG)
+        assert rows[0]["outcome"] == decision_trace.OUTCOME_REJECTED_BY_GUARD
+        assert reason in rows[0]["decision_text"]
 
 
 # ---------------------------------------------------------------------------

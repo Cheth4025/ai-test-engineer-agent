@@ -192,6 +192,22 @@ def test_plain_reload_never_calls_orchestration_entry_points(monkeypatch, tmp_pa
     assert not at.exception
 
 
+def test_static_css_injected_once_not_every_fragment_tick(monkeypatch, tmp_path, ui_script_path):
+    """Point A.1 of the polish-1 spec: "Inject ONE CSS block once per
+    run" -- the ~700-line AAE_CSS stylesheet must not be re-sent on every
+    st.fragment(run_every=2) tick (a plain reload/rerun simulates one)."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+
+    style_blocks = [m.value for m in at.markdown if "aae-card-heading" in m.value and "<style>" in m.value]
+    assert len(style_blocks) == 1
+
+    at.run()  # a second tick -- same session, CSS must not be re-injected
+    style_blocks_after = [m.value for m in at.markdown if "aae-card-heading" in m.value and "<style>" in m.value]
+    assert len(style_blocks_after) == 0
+
+
 # ---------------------------------------------------------------------------
 # Overview page content
 # ---------------------------------------------------------------------------
@@ -416,6 +432,54 @@ def test_action_banner_on_overview_for_awaiting_approval(monkeypatch, tmp_path, 
     at = _navigate(at, "execution")
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "Action needed below" in markdown_text and "record the approval decision" in markdown_text
+
+
+def test_rule_match_buttons_disabled_while_a_worker_is_busy(monkeypatch, tmp_path, ui_script_path):
+    """Every other mutating control (Start Analysis, Confirm decision,
+    Approve, Reject, Execute) disables itself while state.worker_busy is
+    True, so a human can't fire a second write while a background worker
+    is already writing this run's files. The Matches/No match buttons
+    must do the same -- resolve_grounding() writes grounding_v{N}.json,
+    which can race a concurrent REMEDIATE_GAP/RESCORING cycle writing the
+    same file for the same run."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+    controller.save_evidence(
+        "grounding_v1.json",
+        {
+            "scenario_set_version": 1,
+            "items": [{"scenario_id": "S01", "verdict": "NEEDS_REVIEW", "confidence": 0.5, "human_resolution": None}],
+        },
+    )
+
+    release = threading.Event()
+
+    def slow_resume(run_id: str, choice: str) -> dict:
+        release.wait(timeout=2)
+        return {"run_id": run_id, "workflow_state": "AWAITING_APPROVAL", "stage": "AWAITING_APPROVAL"}
+
+    monkeypatch.setattr(orchestration, "resume_pending_decision", slow_resume)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Matches"))
+
+    assert all(b.disabled is False for b in at.button if b.label == "Matches")
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("ACCEPT_COVERAGE").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()  # worker_busy=True now
+
+    assert any(b.label == "Matches" for b in at.button)
+    assert all(b.disabled is True for b in at.button if b.label == "Matches")
+    assert all(b.disabled is True for b in at.button if b.label == "No match")
+
+    release.set()
+    time.sleep(0.1)
+    at.run()
 
 
 def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
