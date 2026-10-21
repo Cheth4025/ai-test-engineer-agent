@@ -662,6 +662,34 @@ def test_rule_match_header_shows_question_decider_score_and_answered_count(
     assert "review needed" not in markdown_text
     assert "1 of 2 answered" in markdown_text
 
+    # polish-2 live-check round: one bold teal header line combining the
+    # version label with "Matches its rules?", the counter right-aligned
+    # on the SAME line (one aae-rule-match-header div, not two separate
+    # caption lines), plus a small column label above the Yes/No buttons.
+    # The rendered tag, not the bare class name -- the injected <style>
+    # block legitimately contains the literal CSS selector text too (same
+    # false-positive trap as Group B's KPI-row ordering test).
+    header_div = next(v for v in (m.value for m in at.markdown) if '<div class="aae-rule-match-header">' in v)
+    assert "Version 1 (v1) · Matches its rules?" in header_div
+    assert "1 of 2 answered" in header_div
+    assert "Rules match?" in markdown_text
+
+
+def test_rule_match_note_field_is_plain_text_input_not_an_expander(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+
+    assert not at.exception
+    assert len(at.expander) == 0  # no expander anywhere on this page
+    assert any(w.label == "Note (optional)" for w in at.text_input)
+
 
 def test_answered_rule_match_rows_stay_visible_without_reopening_the_form(
     monkeypatch, tmp_path, ui_script_path
@@ -1149,6 +1177,42 @@ def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypa
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "0.42" in markdown_text
     assert "REMEDIATE_GAP" in markdown_text  # the real bounded choice, not "Confirm"/"Proceed"
+
+
+def test_scenarios_page_gherkin_with_blank_lines_reaches_st_html_intact(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 live-check round regression: real Gherkin can have blank
+    lines between steps. Markdown ends raw-HTML-block parsing at the
+    first blank line (CommonMark's own rule), so a blank-line-containing
+    <pre> passed to st.markdown(unsafe_allow_html=True) loses its box and
+    its remaining newlines -- confirmed live by the user. ui.py now
+    renders Gherkin via st.html(), which never runs the Markdown parser,
+    so this must survive intact: the <pre> tag, both keyword spans, and
+    the blank line itself all still present in the st.html element's own
+    value (not split into a separate markdown paragraph)."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)
+    scenarios_path = tmp_path / "run-1" / "scenarios_v2.json"
+    scenarios = json.loads(scenarios_path.read_text())
+    scenarios["scenarios"][0]["gherkin"] = "Scenario: S01\n\nGiven a valid payment\nWhen submitted"
+    scenarios_path.write_text(json.dumps(scenarios))
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "scenarios")
+    at = _settle(at, lambda a: len(a.tabs) >= 5)
+
+    assert not at.exception
+    html_values = [h.value for h in at.html]
+    gherkin_html = next(v for v in html_values if "a valid payment" in v)
+    assert '<pre class="aae-code aae-code--gherkin"' in gherkin_html
+    assert "\n\n" in gherkin_html  # the blank line survives, unlike through st.markdown
+    assert '<span class="aae-kw-scenario" style="color:#5EEAD4">Scenario</span>' in gherkin_html
+    assert '<span class="aae-kw-step" style="color:#93C5FD">Given</span> a valid payment' in gherkin_html
+
+    # And it must NOT have leaked into a markdown paragraph instead.
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "a valid payment" not in markdown_text
 
 
 def test_scenarios_page_gherkin_tabs_one_per_scenario(monkeypatch, tmp_path, ui_script_path):

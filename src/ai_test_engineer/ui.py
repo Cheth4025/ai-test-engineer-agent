@@ -1264,15 +1264,17 @@ def _rule_match_added_ids(versions_list: list[dict], latest_entry: dict) -> froz
 
 
 def _rule_match_version_context(versions_list: list[dict], latest_entry: dict) -> str:
-    """v1: a plain version label. v2+ (polish-2 group C9): names what
-    changed -- the scenario(s) added by remediation and the rules they
-    cover, derived purely by diffing this version's scenarios against the
+    """"" when there's nothing extra to say -- the bare version number is
+    already in _render_rule_match_rows' own header (polish-2 live-check
+    round). v2+ with scenarios added by remediation (polish-2 group C9):
+    names what changed -- the scenario(s) added and the rules they cover,
+    derived purely by diffing this version's scenarios against the
     previous one (added_by_remediation), never invented."""
     version = latest_entry["version"]
     scenarios = (latest_entry["scenarios"] or {}).get("scenarios", [])
     added_ids = _rule_match_added_ids(versions_list, latest_entry)
     if not added_ids:
-        return f"v{version}"
+        return ""
     added = [s for s in scenarios if s["scenario_id"] in added_ids]
     names = ", ".join(s["scenario_id"] for s in added)
     rules = sorted({r for s in added for r in s.get("rule_ids", [])})
@@ -1306,6 +1308,7 @@ def _render_rule_match_rows(
     *,
     added_ids: frozenset[str] = frozenset(),
     previous_resolutions: dict[str, str] | None = None,
+    version_context: str = "",
 ) -> None:
     """One row per rule-match item that ever needed a human call (05_
     analysis.png's "Matches its rules?" table): a live Yes/No form while
@@ -1321,7 +1324,9 @@ def _render_rule_match_rows(
     added_ids/previous_resolutions (polish-2 group C9): a scenario newly
     added by remediation gets a "New in v{version}" badge + tinted row; a
     re-checked scenario shows its v1 resolution as a hint, never
-    pre-selected."""
+    pre-selected. version_context (polish-2 group C9, caller-computed via
+    _rule_match_version_context): the "after remediation" sentence when
+    this version added scenarios, rendered as a sub-line under the header."""
     previous_resolutions = previous_resolutions or {}
     scenarios = (entry["scenarios"] or {}).get("scenarios", [])
     catalog = {s["scenario_id"]: s for s in scenarios}
@@ -1329,8 +1334,30 @@ def _render_rule_match_rows(
     answerable_ids = _rule_match_answerable_ids(entry)
     answered_count = len(answerable_ids) - len(entry["unresolved_grounding"])
 
+    # polish-2 live-check round: one bold teal header line ("Version N
+    # (vN) · Matches its rules?") with the "n of N answered" counter
+    # right-aligned on the SAME line -- replaces the separate _card_heading
+    # + caption the caller used to render. Bold/teal inline-styled, same
+    # reasoning as the KPI/code-block fixes (a raised-specificity CSS rule
+    # alone isn't reliable here); the flex layout stays a CSS class, since
+    # layout isn't what's been losing the cascade.
     st.markdown(
-        ui_components.small_caption(f"{answered_count} of {len(answerable_ids)} answered"),
+        '<div class="aae-rule-match-header">'
+        f'<span style="font-weight:700;color:#0B5F57;font-size:14px;">'
+        f"Version {selected_version} (v{selected_version}) · Matches its rules?</span>"
+        f'<span class="aae-rule-match-header-count">{answered_count} of {len(answerable_ids)} answered</span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if version_context:
+        st.markdown(ui_components.small_caption(version_context), unsafe_allow_html=True)
+
+    # polish-2 live-check round: a small column label above the Yes/No
+    # buttons, same column proportions as each row's own st.columns so it
+    # lines up visually.
+    header_cols = st.columns([2, 2, 3, 3])
+    header_cols[3].markdown(
+        '<p style="font-size:11px;font-weight:700;color:#5B6878;margin:0 0 4px 0">Rules match?</p>',
         unsafe_allow_html=True,
     )
 
@@ -1366,8 +1393,14 @@ def _render_rule_match_rows(
                     button_cols = st.columns(2)
                     yes_clicked = button_cols[0].form_submit_button("Yes", disabled=state.worker_busy)
                     no_clicked = button_cols[1].form_submit_button("No", disabled=state.worker_busy)
-                with st.expander("Note (optional)"):
-                    note = st.text_input("Note", key=f"note_{selected_version}_{scenario_id}", label_visibility="collapsed")
+                # polish-2 live-check round: a plain single-line field in
+                # the row, not an expander (was hiding the note control
+                # behind a click).
+                note = st.text_input(
+                    "Note (optional)",
+                    key=f"note_{selected_version}_{scenario_id}",
+                    placeholder="Add a note…",
+                )
                 if yes_clicked or no_clicked:
                     resolution = "CONFIRMED_GROUNDED" if yes_clicked else "CONFIRMED_NOT_GROUNDED"
                     with state.lock:  # serialize against a worker thread writing the same run's files
@@ -1442,11 +1475,10 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
                 _render_confirm_decision(state, controller)
         if has_rule_match_items:
             with inbox_right, ui_components.widget_card_container("rule-match-inbox"):
-                _card_heading("Matches its rules?")
-                st.markdown(
-                    ui_components.small_caption(_rule_match_version_context(versions_list, latest_entry)),
-                    unsafe_allow_html=True,
-                )
+                # Header (bold teal "Version N (vN) · Matches its rules?"
+                # + right-aligned counter) is now rendered by
+                # _render_rule_match_rows itself, which already computes
+                # the counter -- no separate _card_heading/caption here.
                 _render_rule_match_rows(
                     state,
                     controller,
@@ -1454,6 +1486,7 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
                     latest_entry,
                     added_ids=_rule_match_added_ids(versions_list, latest_entry),
                     previous_resolutions=_rule_match_previous_resolutions(versions_list, latest_entry),
+                    version_context=_rule_match_version_context(versions_list, latest_entry),
                 )
 
     if controller is not None:
@@ -1690,7 +1723,13 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
                         block = ui_components.code_block(ui_components.gherkin_highlight(gherkin), language="gherkin")
                     else:
                         block = ui_components.code_block(ui_components.escape("(no gherkin available)"))
-                    st.markdown(block, unsafe_allow_html=True)
+                    # st.html, not st.markdown: a blank line inside Gherkin
+                    # text ends Markdown's raw-HTML-block parsing early
+                    # (CommonMark's own rule), so the rest of the <pre>
+                    # content rendered as a plain paragraph instead of
+                    # staying inside the code block -- st.html never runs
+                    # the Markdown parser at all, so this can't happen.
+                    st.html(block)
 
 
 # ---------------------------------------------------------------------------
@@ -1895,15 +1934,22 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                 ["ID", "Scenario", "Result"], rows, row_classes=row_classes, col_widths=["44px", None, None]
             )
         st.markdown(ui_components.card("Test run", body), unsafe_allow_html=True)
-    with log_col:
+    with log_col, ui_components.widget_card_container("execution-log"):
+        _card_heading("Execution log")
         log_path = controller.run_dir / "execution" / "pytest_output.log" if controller is not None else None
         if log_path is not None and log_path.exists():
+            # st.html, not card()+st.markdown: a blank line inside the
+            # pytest log ends Markdown's raw-HTML-block parsing early
+            # (CommonMark's own rule), breaking the <pre> structure --
+            # st.html never runs the Markdown parser, so this can't
+            # happen. _card_heading above is its own short, safe markdown
+            # call; only the code block itself needs to bypass markdown.
             log_body = ui_components.code_block(
                 ui_components.log_highlight(log_path.read_text(encoding="utf-8", errors="replace"))
             )
+            st.html(log_body)
         else:
-            log_body = "<p>Real pytest output appears here after execution.</p>"
-        st.markdown(ui_components.card("Execution log", log_body), unsafe_allow_html=True)
+            st.markdown("<p>Real pytest output appears here after execution.</p>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2061,25 +2107,25 @@ def _render_page_results(state: UIState, data: dict) -> None:
             evidence = _load_json(controller.run_dir / evidence_reference) if evidence_reference else None
             evidence = evidence or {}
             tabs = st.tabs(["Callbacks", "Ledger entries", "Test log"])
+            # st.html, not st.markdown, for every code block below: a
+            # blank line inside the content ends Markdown's raw-HTML-block
+            # parsing early (CommonMark's own rule), breaking the <pre>
+            # structure -- st.html never runs the Markdown parser.
             with tabs[0]:
                 callbacks = [e for e in evidence.get("events", []) if e.get("action") == "callback_delivered"]
-                st.markdown(
-                    ui_components.code_block(ui_components.escape(json.dumps(callbacks, indent=2)), language="json"),
-                    unsafe_allow_html=True,
+                st.html(
+                    ui_components.code_block(ui_components.escape(json.dumps(callbacks, indent=2)), language="json")
                 )
             with tabs[1]:
-                st.markdown(
+                st.html(
                     ui_components.code_block(
                         ui_components.escape(json.dumps(evidence.get("ledger", []), indent=2)), language="json"
-                    ),
-                    unsafe_allow_html=True,
+                    )
                 )
             with tabs[2]:
                 log_path = controller.run_dir / results.get("log_reference", "")
                 log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else "(no log captured)"
-                st.markdown(
-                    ui_components.code_block(ui_components.log_highlight(log_text)), unsafe_allow_html=True
-                )
+                st.html(ui_components.code_block(ui_components.log_highlight(log_text)))
             st.markdown(
                 ui_components.small_caption("Real JSON is whatever the test wrote to the run's evidence folder."),
                 unsafe_allow_html=True,

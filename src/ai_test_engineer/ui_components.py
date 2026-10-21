@@ -187,7 +187,11 @@ def kpi_row(tiles: list[dict]) -> str:
         cells.append(
             '<div class="aae-kpi-tile">'
             f'<p class="aae-kpi-label">{escape(tile["label"])}</p>'
-            f'<p class="aae-kpi-value{value_class}">{escape(tile["value"])}</p>'
+            # Inline style, not just the aae-kpi-value CSS class: raised
+            # selector specificity alone still lost to Streamlit's cascade
+            # live (confirmed by the user) -- inline wins unconditionally.
+            f'<p class="aae-kpi-value{value_class}" style="font-size:30px;font-weight:700;line-height:1.1">'
+            f'{escape(tile["value"])}</p>'
             f'<p class="aae-kpi-sub">{escape(tile.get("sub", ""))}</p>'
             "</div>"
         )
@@ -246,8 +250,17 @@ def progress(steps: list[dict]) -> str:
             raise ValueError(f"unknown progress state {state!r}")
         connector = ""
         if index < total - 1:
-            filled = " aae-progress-connector--filled" if state in ("done", "current") else ""
-            connector = f'<span class="aae-progress-connector{filled}"></span>'
+            is_filled = state in ("done", "current")
+            filled = " aae-progress-connector--filled" if is_filled else ""
+            # Inline-styled arrow glyph (polish-2 live-check round): the
+            # line (aae-progress-connector, CSS-positioned, unchanged)
+            # rendered but had no visible arrow character on top of it.
+            arrow_color = "#0D9488" if is_filled else "#9CA7B4"
+            connector = (
+                f'<span class="aae-progress-connector{filled}"></span>'
+                f'<span style="position:absolute;top:3px;left:50%;transform:translateX(-50%);'
+                f'font-size:15px;line-height:1;color:{arrow_color};z-index:1;">→</span>'
+            )
         sub_html = f'<p class="aae-progress-sub">{escape(step.get("sub", ""))}</p>' if step.get("sub") else ""
         dots.append(
             '<span class="aae-progress-step">'
@@ -270,8 +283,20 @@ def busy_indicator(label: str) -> str:
 def code_block(text_html: str, *, language: str = "text") -> str:
     """text_html is pre-built HTML (already escaped, and already
     keyword/status-highlighted by gherkin_highlight()/log_highlight() if
-    applicable) -- NOT escaped again here."""
-    return f'<pre class="aae-code aae-code--{language}">{text_html}</pre>'
+    applicable) -- NOT escaped again here.
+
+    Inline style, not just the aae-code CSS class: raised selector
+    specificity alone still lost to Streamlit's cascade live (confirmed by
+    the user) -- inline wins unconditionally. Callers in ui.py render this
+    via st.html(), never st.markdown() -- see those call sites' comments
+    for why (a blank line inside the content would otherwise end
+    Markdown's raw-HTML-block parsing early)."""
+    style = (
+        "background:#0F1B2D;color:#D7E0EA;border-radius:7px;padding:12px 14px;"
+        "font-family:'Source Code Pro',monospace;font-size:11.5px;line-height:1.6;"
+        "white-space:pre-wrap;margin:0"
+    )
+    return f'<pre class="aae-code aae-code--{language}" style="{style}">{text_html}</pre>'
 
 
 _GHERKIN_KEYWORD_RE = re.compile(r"^(\s*)(Scenario|Given|When|Then|And)\b")
@@ -291,7 +316,8 @@ def gherkin_highlight(raw_text: str) -> str:
         if match:
             indent, keyword = match.group(1), match.group(2)
             css_class = "aae-kw-scenario" if keyword == "Scenario" else "aae-kw-step"
-            line = f'{indent}<span class="{css_class}">{keyword}</span>' + line[match.end() :]
+            color = "#5EEAD4" if keyword == "Scenario" else "#93C5FD"
+            line = f'{indent}<span class="{css_class}" style="color:{color}">{keyword}</span>' + line[match.end() :]
         lines.append(line)
     return "\n".join(lines)
 
@@ -307,7 +333,8 @@ def log_highlight(raw_text: str) -> str:
     def _span(match: re.Match) -> str:
         word = match.group(1)
         css_class = "aae-log-pass" if word == "PASSED" else "aae-log-fail"
-        return f'<span class="{css_class}">{word}</span>'
+        color = "#86EFAC" if word == "PASSED" else "#FCA5A5"
+        return f'<span class="{css_class}" style="color:{color}">{word}</span>'
 
     return _LOG_STATUS_RE.sub(_span, escaped)
 
@@ -861,6 +888,17 @@ AAE_CSS = f"""
     z-index: -1;
 }}
 .aae-progress-connector--filled {{ background-color: #2DD4BF; }}
+
+/* -- Rule-match inbox header (polish-2 live-check round): one line,
+   title left, counter right-aligned. -- */
+.aae-rule-match-header {{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}}
+.aae-rule-match-header-count {{ font-size: 12px; color: #5B6878; white-space: nowrap; }}
 
 /* -- Rule-match inbox answered rows (polish-2 group C8/C9) -- a static
    row for an already-answered item, same visual column rhythm as the

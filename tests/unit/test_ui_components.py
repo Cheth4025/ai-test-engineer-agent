@@ -214,6 +214,15 @@ def test_kpi_row_renders_each_tile():
     assert "aae-kpi-value--failed" in result
 
 
+def test_kpi_row_value_has_inline_style():
+    # polish-2 live-check round: raised CSS specificity alone still lost
+    # to Streamlit's cascade live (confirmed by the user) -- an inline
+    # style= wins regardless, so this is a rendered-element check, not a
+    # CSS-source check.
+    result = uc.kpi_row([{"label": "Total tests", "value": "5", "tone": "default"}])
+    assert 'style="font-size:30px;font-weight:700;line-height:1.1"' in result
+
+
 def test_kpi_row_escapes_tile_text():
     result = uc.kpi_row([{"label": UNSAFE_TEXT, "value": "1", "tone": "default"}])
     assert ESCAPED_UNSAFE_TEXT in result
@@ -323,6 +332,23 @@ def test_progress_escapes_label_and_sub():
     assert result.count(ESCAPED_UNSAFE_TEXT) == 2
 
 
+def test_progress_connector_shows_a_visible_arrow_glyph():
+    # polish-2 live-check round: the connector line rendered but had no
+    # visible arrow glyph -- add one, inline-styled per the same
+    # reasoning as the KPI/code-block fixes above.
+    steps = [{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}]
+    result = uc.progress(steps)
+    assert "→" in result
+    assert 'style="position:absolute' in result
+
+
+def test_progress_connector_arrow_is_teal_when_filled_grey_when_not():
+    filled = uc.progress([{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}])
+    not_filled = uc.progress([{"label": "A", "sub": "", "state": "future"}, {"label": "B", "sub": "", "state": "future"}])
+    assert "#0D9488" in filled
+    assert "#9CA7B4" in not_filled
+
+
 # ---------------------------------------------------------------------------
 # code_block() / gherkin_highlight() / log_highlight()
 # ---------------------------------------------------------------------------
@@ -332,6 +358,17 @@ def test_code_block_wraps_prebuilt_content():
     result = uc.code_block("already &lt;escaped&gt; text")
     assert "already &lt;escaped&gt; text" in result
     assert result.startswith('<pre class="aae-code aae-code--text"')
+
+
+def test_code_block_has_inline_style():
+    # polish-2 live-check round: same reasoning as kpi_row's inline-style
+    # test above -- an inline style= on the <pre> itself, verbatim.
+    result = uc.code_block("x")
+    assert (
+        'style="background:#0F1B2D;color:#D7E0EA;border-radius:7px;padding:12px 14px;'
+        'font-family:\'Source Code Pro\',monospace;font-size:11.5px;line-height:1.6;'
+        'white-space:pre-wrap;margin:0"'
+    ) in result
 
 
 def test_gherkin_highlight_escapes_raw_model_text():
@@ -344,18 +381,28 @@ def test_gherkin_highlight_escapes_raw_model_text():
 def test_gherkin_highlight_spans_keywords():
     raw = "Scenario: S01 - Initial payment succeeds\nGiven a valid payment\nWhen submitted\nThen it succeeds\nAnd one charge exists"
     result = uc.gherkin_highlight(raw)
-    assert '<span class="aae-kw-scenario">Scenario</span>' in result
-    assert '<span class="aae-kw-step">Given</span>' in result
-    assert '<span class="aae-kw-step">When</span>' in result
-    assert '<span class="aae-kw-step">Then</span>' in result
-    assert '<span class="aae-kw-step">And</span>' in result
+    assert '<span class="aae-kw-scenario" style="color:#5EEAD4">Scenario</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">Given</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">When</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">Then</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">And</span>' in result
 
 
 def test_gherkin_highlight_does_not_rewrite_keyword_substrings_mid_line():
     # "Andover" must not be treated as the And keyword.
     raw = "Andover is a town, not a step keyword"
     result = uc.gherkin_highlight(raw)
-    assert '<span class="aae-kw-step">And</span>' not in result
+    assert '>And</span>' not in result
+
+
+def test_gherkin_highlight_preserves_blank_lines():
+    # Live-check root cause: real Gherkin can have blank lines between
+    # steps -- gherkin_highlight() itself must never collapse them (the
+    # fix for Markdown eating them is st.html() at the call site, but
+    # this function's own output must still carry them through intact).
+    raw = "Scenario: S01\n\nGiven a valid payment\nWhen submitted"
+    result = uc.gherkin_highlight(raw)
+    assert "\n\n" in result
 
 
 def test_log_highlight_escapes_raw_text():
@@ -367,8 +414,41 @@ def test_log_highlight_escapes_raw_text():
 def test_log_highlight_spans_passed_and_failed():
     raw = "tests/t01.py PASSED\ntests/t04.py FAILED"
     result = uc.log_highlight(raw)
-    assert '<span class="aae-log-pass">PASSED</span>' in result
-    assert '<span class="aae-log-fail">FAILED</span>' in result
+    assert '<span class="aae-log-pass" style="color:#86EFAC">PASSED</span>' in result
+    assert '<span class="aae-log-fail" style="color:#FCA5A5">FAILED</span>' in result
+
+
+# ---------------------------------------------------------------------------
+# polish-2 live-check round: a blank line inside HTML passed to
+# st.markdown(unsafe_allow_html=True) ends Markdown's raw-HTML-block
+# parsing early (CommonMark's own rule) -- the rest renders as a plain
+# paragraph instead of staying inside the intended tag. code_block()'s
+# own output is exempt (its three call sites in ui.py now use st.html(),
+# which never runs the Markdown parser at all) -- this guards every OTHER
+# HTML-building function, which must never embed a literal blank line.
+# ---------------------------------------------------------------------------
+
+
+def test_no_other_html_builder_embeds_a_blank_line():
+    samples = [
+        uc.card("Heading", "<p>Body</p><p>More</p>", tone="teal-accent"),
+        uc.table(["A", "B"], [["1", "2"], ["3", "4"]], fixed_layout=True, header_variant="teal"),
+        uc.banner("Title", "Sub line", variant="action-needed", action_html="<a href='#x'>Go</a>"),
+        uc.kpi_row([{"label": "A", "value": "1", "sub": "s", "tone": "passed"}]),
+        uc.progress([{"label": "Step", "sub": "waiting", "state": "current"}, {"label": "Next", "sub": "", "state": "future"}]),
+        uc.conf_bar(0.8, 0.75),
+        uc.pill("Matches", "matches"),
+        uc.labeled_section("aae-label-problem", "PROBLEM", "Some text."),
+        uc.checklist(["One", "Two"]),
+        uc.numbered_steps(["One", "Two"]),
+        uc.busy_indicator("Generating scenarios…"),
+        uc.decision_trace_table(
+            [{"checkpoint": "COVERAGE", "icon": "✅", "decision_text": "x", "detail": None, "confidence": 0.9,
+              "threshold": 0.75, "route": "AUTO", "source": "DECIDER", "override": False, "outcome": "Auto"}]
+        ),
+    ]
+    for sample in samples:
+        assert "\n\n" not in sample, sample[:200]
 
 
 # ---------------------------------------------------------------------------
