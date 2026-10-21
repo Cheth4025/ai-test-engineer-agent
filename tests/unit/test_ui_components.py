@@ -401,6 +401,17 @@ def test_widget_card_container_is_callable():
     assert callable(uc.widget_card_container)
 
 
+def test_busy_indicator_escapes_label():
+    result = uc.busy_indicator(UNSAFE_TEXT)
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result
+
+
+def test_busy_indicator_has_the_pulsing_dot_span():
+    result = uc.busy_indicator("Generating scenarios…")
+    assert '<span class="aae-busy-dot">' in result
+
+
 # ---------------------------------------------------------------------------
 # AAE_CSS -- a static config-like asset, not testable behavior in the usual
 # TDD sense; a smoke test still catches an accidental drift between the
@@ -462,6 +473,26 @@ def test_aae_css_zeroes_stmarkdowncontainer_negative_margin():
 
 def test_aae_css_has_no_aite_prefixed_classes():
     assert "aite-" not in uc.AAE_CSS
+
+
+def test_aae_css_results_download_buttons_are_teal():
+    # polish-2 group B5: the two Results-page download buttons are teal
+    # like every other live/enabled control (download_report_btn/
+    # download_evidence_btn, shared by both the live st.download_button
+    # and the locked st.button fallback).
+    assert ".st-key-download_report_btn button" in uc.AAE_CSS
+    assert ".st-key-download_evidence_btn button" in uc.AAE_CSS
+
+
+def test_aae_css_banner_action_buttons_are_teal():
+    # polish-2 group B4: the action banner's cross-page "Go to X" button
+    # (a plain st.button keyed jump_to_action_page) and the same-page
+    # "Jump to it" anchor (styled via .aae-btn-teal, since it's a real <a>,
+    # not a widget) both read teal, the same brand accent every other
+    # live/enabled control already uses.
+    assert ".st-key-jump_to_action_page button {" in uc.AAE_CSS
+    assert f"background-color: {uc._CONF_TEAL} !important;" in uc.AAE_CSS
+    assert ".aae-btn-teal {" in uc.AAE_CSS
 
 
 # ---------------------------------------------------------------------------

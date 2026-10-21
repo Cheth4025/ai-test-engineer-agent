@@ -988,7 +988,7 @@ def _render_action_banner(data: dict, current_section_id: str) -> None:
         return
     verb = _ACTION_VERB[action["kind"]]
     if action["section_id"] == current_section_id:
-        jump_link = f'<a href="#{_ACTION_ANCHOR_ID}">Jump to it</a>'
+        jump_link = f'<a class="aae-btn-teal" href="#{_ACTION_ANCHOR_ID}">Jump to it</a>'
         st.markdown(
             ui_components.banner(
                 f"Action needed below: {verb}.", None, variant="action-needed", action_html=jump_link
@@ -1751,6 +1751,34 @@ def _render_page_results(state: UIState, data: dict) -> None:
     workflow_status = metadata.get("agent_workflow_status") or controller.workflow_state
     verification_status = metadata.get("payment_verification_status") or reporting.payment_verification_status(results)
 
+    # polish-2 group B5: downloads move to the top, under the title,
+    # right-aligned -- were at the very bottom of the page.
+    report_path = controller.run_dir / "report.md"
+    _, download_report_col, download_evidence_col = st.columns([6, 2, 2])
+    with download_report_col:
+        if report_path.exists():
+            st.download_button(
+                "Download report (.md)",
+                data=report_path.read_bytes(),
+                file_name="report.md",
+                mime="text/markdown",
+                key="download_report_btn",
+            )
+        else:
+            st.button("Download report (.md)", key="download_report_btn", icon=":material/lock:", disabled=True)
+    with download_evidence_col:
+        zip_bytes = build_evidence_zip(controller.run_dir)
+        if zip_bytes is not None:
+            st.download_button(
+                "Download evidence (.zip)",
+                data=zip_bytes,
+                file_name=f"{controller.run_id}_evidence.zip",
+                mime="application/zip",
+                key="download_evidence_btn",
+            )
+        else:
+            st.button("Download evidence (.zip)", key="download_evidence_btn", icon=":material/lock:", disabled=True)
+
     banner_cols = st.columns(2)
     with banner_cols[0]:
         st.markdown(
@@ -1865,30 +1893,6 @@ def _render_page_results(state: UIState, data: dict) -> None:
                 ui_components.small_caption("Real JSON is whatever the test wrote to the run's evidence folder."),
                 unsafe_allow_html=True,
             )
-
-    report_path = controller.run_dir / "report.md"
-    download_cols = st.columns(2)
-    with download_cols[0]:
-        if report_path.exists():
-            st.download_button(
-                "Download report (.md)",
-                data=report_path.read_bytes(),
-                file_name="report.md",
-                mime="text/markdown",
-            )
-        else:
-            st.button("Download report (.md)", key="download_report_btn", icon=":material/lock:", disabled=True)
-    with download_cols[1]:
-        zip_bytes = build_evidence_zip(controller.run_dir)
-        if zip_bytes is not None:
-            st.download_button(
-                "Download evidence (.zip)",
-                data=zip_bytes,
-                file_name=f"{controller.run_id}_evidence.zip",
-                mime="application/zip",
-            )
-        else:
-            st.button("Download evidence (.zip)", key="download_evidence_btn", icon=":material/lock:", disabled=True)
 
 
 _NAV_RENDERERS = {

@@ -491,7 +491,8 @@ def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeyp
 
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "confirm the Decider decision" in markdown_text
-    assert '<a href="#aae-action-anchor">Jump to it</a>' in markdown_text
+    # polish-2 group B4: the anchor is now teal-styled (aae-btn-teal).
+    assert '<a class="aae-btn-teal" href="#aae-action-anchor">Jump to it</a>' in markdown_text
 
     at = _navigate(at, "scenarios")
     markdown_text = " ".join(m.value for m in at.markdown)
@@ -1552,6 +1553,44 @@ def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_pa
 
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "5/5 run · 4 passed · 1 failed · 0.4s" in markdown_text
+
+
+def test_results_downloads_render_before_the_kpi_row(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 group B5: the download buttons move to directly under the
+    title/banners, right-aligned -- no longer at the very bottom of the
+    page. Block.__iter__ yields every node (blocks and leaf elements, both
+    types mixed) in real render/DOM order, so comparing index positions
+    across the two different element types (button vs markdown) proves
+    actual page order, not just that both exist somewhere."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "results")
+    at = _settle(at, lambda a: any("Agent workflow" in m.value for m in a.markdown))
+
+    nodes = list(at.main)
+
+    def _text_of(node) -> str:
+        value = getattr(node, "value", "")
+        return value if isinstance(value, str) else ""
+
+    download_index = next(
+        i for i, n in enumerate(nodes) if getattr(n, "label", None) == "Download report (.md)"
+    )
+    # The rendered tag, not the bare class name -- the injected <style>
+    # block (very top of the page, every rerun) legitimately contains the
+    # literal CSS selector ".aae-kpi-row {", which a bare substring match
+    # would also match, giving a false near-zero index.
+    kpi_index = next(i for i, n in enumerate(nodes) if '<div class="aae-kpi-row">' in _text_of(n))
+    test_results_card_index = next(i for i, n in enumerate(nodes) if "Test results" in _text_of(n))
+    assert download_index < kpi_index < test_results_card_index
 
 
 def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_script_path):

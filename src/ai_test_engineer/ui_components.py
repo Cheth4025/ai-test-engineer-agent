@@ -654,6 +654,37 @@ AAE_CSS = f"""
     color: #5B7C78 !important;
     border: 1px dashed #9CC9C3 !important;
 }}
+/* -- Action banner buttons (polish-2 group B4): the cross-page "Go to X"
+   button and the same-page "Jump to it" anchor both read as solid teal,
+   the same brand accent as every other live/enabled control. -- */
+.st-key-jump_to_action_page button {{
+    background-color: {_CONF_TEAL} !important;
+    color: #FFFFFF !important;
+    border-color: {_CONF_TEAL} !important;
+}}
+/* -- Results download buttons (polish-2 group B5) -- */
+.st-key-download_report_btn button,
+.st-key-download_evidence_btn button {{
+    background-color: {_CONF_TEAL} !important;
+    color: #FFFFFF !important;
+    border-color: {_CONF_TEAL} !important;
+}}
+.st-key-download_report_btn button:disabled,
+.st-key-download_evidence_btn button:disabled {{
+    background-color: #E6F2F1 !important;
+    color: #5B7C78 !important;
+    border: 1px dashed #9CC9C3 !important;
+}}
+.aae-btn-teal {{
+    display: inline-block;
+    background-color: {_CONF_TEAL};
+    color: #FFFFFF !important;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 7px;
+    text-decoration: none !important;
+}}
 
 /* -- Confidence bar -- */
 .aae-conf-bar {{ display: inline-flex; align-items: center; gap: 8px; }}
