@@ -241,36 +241,36 @@ def conf_bar(confidence: float, threshold: float, *, width_px: int = 90) -> str:
 
 
 def progress(steps: list[dict]) -> str:
-    """Each step's label/sub are leaf/plain text, escaped internally."""
-    dots = []
+    """Each step's label/sub are leaf/plain text, escaped internally.
+
+    One flat flex row: a step element, then -- between steps only -- a
+    separate arrow element sitting in the gap. polish-2 live-check round:
+    the previous connector was an absolutely-positioned line starting at
+    left:50% of ITS OWN step and spanning 100% of that step's width, which
+    put it (and the arrow glyph drawn on top of it) overlapping the NEXT
+    step's circle rather than sitting in the gap between the two. A plain
+    flex sibling can never overlap another flex sibling, so this can't
+    recur. Inline style for the arrow's color, same reasoning as the
+    KPI/code-block fixes -- the arrow is rendered via st.html(), never
+    st.markdown() (see ui.py's Progress card call site)."""
+    parts = []
     total = len(steps)
     for index, step in enumerate(steps):
         state = step["state"]
         if state not in _PROGRESS_STATES:
             raise ValueError(f"unknown progress state {state!r}")
-        connector = ""
-        if index < total - 1:
-            is_filled = state in ("done", "current")
-            filled = " aae-progress-connector--filled" if is_filled else ""
-            # Inline-styled arrow glyph (polish-2 live-check round): the
-            # line (aae-progress-connector, CSS-positioned, unchanged)
-            # rendered but had no visible arrow character on top of it.
-            arrow_color = "#0D9488" if is_filled else "#9CA7B4"
-            connector = (
-                f'<span class="aae-progress-connector{filled}"></span>'
-                f'<span style="position:absolute;top:3px;left:50%;transform:translateX(-50%);'
-                f'font-size:15px;line-height:1;color:{arrow_color};z-index:1;">→</span>'
-            )
         sub_html = f'<p class="aae-progress-sub">{escape(step.get("sub", ""))}</p>' if step.get("sub") else ""
-        dots.append(
+        parts.append(
             '<span class="aae-progress-step">'
             f'<span class="aae-progress-dot aae-progress-dot--{state}">{index + 1}</span>'
             f'<p class="aae-progress-label">{escape(step["label"])}</p>'
             f"{sub_html}"
-            f"{connector}"
             "</span>"
         )
-    return f'<div class="aae-progress">{"".join(dots)}</div>'
+        if index < total - 1:
+            arrow_color = "#0D9488" if state in ("done", "current") else "#9CA7B4"
+            parts.append(f'<span class="aae-progress-arrow" style="color:{arrow_color};">→</span>')
+    return f'<div class="aae-progress">{"".join(parts)}</div>'
 
 
 def busy_indicator(label: str) -> str:
@@ -716,13 +716,17 @@ AAE_CSS = f"""
     padding: 14px 16px;
 }}
 .aae-kpi-label {{ font-size: 11.5px !important; font-weight: 600 !important; color: #4A5868 !important; margin: 0 !important; }}
-/* polish-2 group F16: raised specificity, same reason/technique as the
-   table/code fixes -- a plain .aae-kpi-value rule, even with its own
-   !important, still lost to Streamlit's own stMarkdownContainer/p rule
-   (confirmed live: KPI numbers rendered at ~16px, not 26px). */
+/* polish-2 live-check round: this rule used to also carry font-size/
+   font-weight with !important (group F16) -- that's the real reason the
+   KPI numbers STILL rendered small after kpi_row() got an inline
+   style="font-size:30px..." (group F16 too): a stylesheet rule's
+   !important beats an inline style with no !important of its own,
+   regardless of specificity, so this rule was quietly cancelling the very
+   fix it sat next to. Font-size/weight are inline-only now (kpi_row()'s
+   <p> tag) and the Results KPI row renders via st.html() (outside
+   stMarkdownContainer, so this selector can't even match it) -- color/
+   margin stay here since kpi_row()'s inline style doesn't set them. */
 .block-container [data-testid="stMarkdownContainer"] .aae-kpi-value {{
-    font-size: 26px !important;
-    font-weight: 700 !important;
     color: #0F1B2D !important;
     margin: 2px 0 !important;
 }}
@@ -860,9 +864,20 @@ AAE_CSS = f"""
 }}
 .aae-conf-value {{ font-size: 11.5px; color: #1E2A38; }}
 
-/* -- Progress tracker -- */
+/* -- Progress tracker -- polish-2 live-check round: the arrow is now a
+   plain flex sibling sitting in the gap between two steps (never an
+   absolutely-positioned element drawn on top of a circle -- see
+   progress()'s docstring). -- */
 .aae-progress {{ display: flex; align-items: flex-start; }}
-.aae-progress-step {{ display: flex; flex-direction: column; align-items: center; flex: 1; position: relative; }}
+.aae-progress-step {{ display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0; }}
+.aae-progress-arrow {{
+    flex: 0 0 20px;
+    display: flex;
+    justify-content: center;
+    margin-top: 4px;
+    font-size: 15px !important;
+    line-height: 1 !important;
+}}
 .aae-progress-dot {{
     width: 24px;
     height: 24px;
@@ -878,16 +893,6 @@ AAE_CSS = f"""
 .aae-progress-dot--future {{ background-color: #FFFFFF; color: #9CA7B4; border: 2px solid #C7D0DB; }}
 .aae-progress-label {{ font-size: 12px !important; font-weight: 700 !important; margin: 4px 0 0 0 !important; }}
 .aae-progress-sub {{ font-size: 11.5px !important; color: #5B6878 !important; margin: 0 !important; }}
-.aae-progress-connector {{
-    position: absolute;
-    top: 12px;
-    left: 50%;
-    width: 100%;
-    height: 2px;
-    background-color: #DDE3EA;
-    z-index: -1;
-}}
-.aae-progress-connector--filled {{ background-color: #2DD4BF; }}
 
 /* -- Rule-match inbox header (polish-2 live-check round): one line,
    title left, counter right-aligned. -- */

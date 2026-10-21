@@ -60,6 +60,7 @@ from ai_test_engineer.decision_trace import (
     decider_decision_value,
     decision_icon,
     label_decision_trace,
+    OUTCOME_WAITING,
     pad_not_reached_rows,
     primary_choice_confidence,
     round4,
@@ -258,44 +259,72 @@ def execution_pending_count(controller: RunController | None) -> int:
 # ---------------------------------------------------------------------------
 
 _PROGRESS_STEPS = ["Interpret", "Generate", "Coverage", "Decide", "Approve", "Execute", "Report"]
-_DECIDE_STEP = 3
-
-# Which earlier step is "done" (its own check already ran) when a
-# pre-Approval Decider escalation is pending -- Decide (step 3) is then
-# "current". generate_scenarios gates whether scenario generation proceeds
-# at all, so Generate is the step it belongs to; save_scenario_set gates
-# the coverage result, so Coverage is -- the one example the 05_analysis.png
-# mock actually shows (Coverage done 4/5, Decide current), generalized the
-# same way to the other pre-Approval checkpoint.
-_PRE_APPROVAL_DECISION_DONE_THROUGH = {
-    "generate_scenarios": 1,
-    "save_scenario_set": 2,
-}
-
-# stage -> (done_through_index, current_index) for every stage with no
-# pending AWAITING_DECISION_CONFIRMATION escalation. REMEDIATING/RESCORING
-# fold back into "Coverage" (index 2): they're the sub-flow that resolves a
-# confirmed REMEDIATE_GAP, not a new step. ANALYZING_RESULTS/REPORTING both
-# fold into "Report" (index 6): the 7 fixed steps have no separate
-# "Analyze" slot.
-_STAGE_DONE_CURRENT = {
-    "INTERPRETING": (-1, 0),
-    "GENERATING": (0, 1),
-    "SCORING": (1, 2),
-    "REMEDIATING": (1, 2),
-    "RESCORING": (1, 2),
-    "AWAITING_APPROVAL": (3, 4),
-    "APPROVED": (4, 5),
-    "EXECUTING": (4, 5),
-    "ANALYZING_RESULTS": (5, 6),
-    "REPORTING": (5, 6),
-}
 
 
-def _progress_steps(done_through: int, current_index: int | None, *, waiting: bool = False) -> list[dict]:
+def _coverage_decision_resolved(controller: RunController) -> bool:
+    """Decide step's evidence: the COVERAGE checkpoint's own row (from the
+    one decision_trace formatter ui.py/reporting.py both already use) exists
+    and is no longer OUTCOME_WAITING. Read fresh from decisions.json on
+    disk, same as every other display-data read in this module (_load_json
+    at line ~514) -- never from controller.decisions in memory, which a
+    freshly-constructed RunController never repopulates from disk."""
+    decisions = _load_json(controller.run_dir / "decisions.json") or []
+    rows = build_decision_trace(decisions, _decider_cfg())
+    return any(row["checkpoint"] == "COVERAGE" and row["outcome"] != OUTCOME_WAITING for row in rows)
+
+
+def _progress_step_done_flags(controller: RunController | None) -> list[bool]:
+    """Each of the 7 fixed steps' "done" flag, derived from evidence that
+    already exists in the run folder (polish-2 live-check round: the old
+    stage-table mapping reset EVERY step to "future" the moment a run hit
+    BLOCKED/STOPPED/REJECTED, even ones that had genuinely already
+    happened -- a step that's done here can never become not-done on a
+    later call, because every one of these checks is itself monotonic
+    (write-once evidence, or a decision trace row that only ever resolves,
+    never un-resolves)."""
+    if controller is None:
+        return [False] * len(_PROGRESS_STEPS)
+    run_dir = controller.run_dir
+    return [
+        (run_dir / "interpretation.json").exists(),
+        (run_dir / "scenarios_v1.json").exists(),
+        (run_dir / "coverage_v1.json").exists(),
+        _coverage_decision_resolved(controller),
+        (run_dir / "approval.json").exists(),
+        (run_dir / "results.json").exists(),
+        (run_dir / "report.md").exists(),
+    ]
+
+
+def progress_steps_for(controller: RunController | None) -> list[dict]:
+    """Maps the run's on-disk evidence (+ controller.busy/pending_decision
+    for which not-yet-done step is "current") to each of the 7 fixed steps'
+    done/current/future state, for ui_components.progress(). Pure function,
+    no Streamlit -- same style as can_execute etc., unit-tested directly in
+    tests/ui/test_ui_guards.py.
+
+    A step is "current" only while something is actively moving it forward
+    -- the worker is busy, or a human decision/clarification is pending --
+    never merely because it's the next undone step; a run halted with
+    nothing pending (BLOCKED/STOPPED) shows its done steps as done and
+    everything else plainly future, not a guess at "in progress"."""
+    done_flags = _progress_step_done_flags(controller)
+    first_pending = next((index for index, done in enumerate(done_flags) if not done), None)
+
+    # AWAITING_APPROVAL/APPROVED are plain-button human waits (Approve/
+    # Reject, then Execute) -- no Decider pending_decision involved, but
+    # just as much "waiting on a human" as an escalated checkpoint.
+    waiting = controller is not None and (
+        controller.pending_decision is not None
+        or controller.stage == "AWAITING_CLARIFICATION"
+        or controller.workflow_state in ("AWAITING_APPROVAL", "APPROVED")
+    )
+    active = controller is not None and (controller.busy or waiting)
+    current_index = first_pending if (active and first_pending is not None) else None
+
     steps = []
     for index, label in enumerate(_PROGRESS_STEPS):
-        if index <= done_through:
+        if done_flags[index]:
             state = "done"
         elif index == current_index:
             state = "current"
@@ -304,46 +333,6 @@ def _progress_steps(done_through: int, current_index: int | None, *, waiting: bo
         sub = "waiting for you" if (waiting and index == current_index) else ""
         steps.append({"label": label, "sub": sub, "state": state})
     return steps
-
-
-def progress_steps_for(controller: RunController | None) -> list[dict]:
-    """Maps controller.stage/workflow_state/pending_decision to each of the
-    7 fixed steps' done/current/future state, for ui_components.progress().
-    Pure function, no Streamlit, no I/O beyond controller's already-loaded
-    attributes -- same style as can_execute etc., unit-tested directly in
-    tests/ui/test_ui_guards.py.
-
-    BLOCKED/STOPPED deliberately return "position unknown" (all future):
-    checkpoints.py/ui.py overwrite controller.stage to the literal string
-    "BLOCKED"/"STOPPED" at the moment of halting (see state.py's
-    set_workflow_state call sites), which loses which real stage it halted
-    FROM. Recovering that would need a backend change outside this UI-only
-    polish pass -- the halt reason is already shown elsewhere (the top-bar
-    chip's state·stage pair and the page's own error message)."""
-    if controller is None:
-        return _progress_steps(-1, None)
-
-    pending = controller.pending_decision
-    if controller.stage == "AWAITING_DECISION_CONFIRMATION" and pending is not None:
-        tool_name = pending.get("tool_name")
-        if tool_name in _PRE_APPROVAL_DECISION_DONE_THROUGH:
-            return _progress_steps(_PRE_APPROVAL_DECISION_DONE_THROUGH[tool_name], _DECIDE_STEP, waiting=True)
-        return _progress_steps(5, 6, waiting=True)  # finalize_analysis / render_report
-
-    if controller.stage == "AWAITING_CLARIFICATION":
-        return _progress_steps(0, 1, waiting=True)
-
-    if controller.workflow_state == "COMPLETED":
-        return _progress_steps(6, None)
-    if controller.workflow_state == "REJECTED":
-        return _progress_steps(4, None)
-    if controller.workflow_state in ("BLOCKED", "STOPPED"):
-        return _progress_steps(-1, None)
-
-    done_current = _STAGE_DONE_CURRENT.get(controller.stage)
-    if done_current is None:
-        return _progress_steps(-1, None)
-    return _progress_steps(*done_current)
 
 
 # ---------------------------------------------------------------------------
@@ -1444,7 +1433,11 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
             start_analysis(state)
             st.rerun()
 
-    st.markdown(ui_components.card("Progress", ui_components.progress(progress_steps_for(controller))), unsafe_allow_html=True)
+    # st.html(), not st.markdown(): the arrow glyph's own flex layout needs
+    # no blank-line-sensitive parsing, but rendering it the same way as the
+    # other fixed-up elements this round keeps one rule for "inline-styled
+    # elements go through st.html()" rather than two.
+    st.html(ui_components.card("Progress", ui_components.progress(progress_steps_for(controller))))
 
     if controller is not None and controller.stage == "AWAITING_CLARIFICATION":
         st.warning("Run is paused awaiting clarification on a critical ambiguity.")
@@ -1736,6 +1729,12 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
 # Page "execution" (Execution)
 # ---------------------------------------------------------------------------
 
+# polish-2 live-check round: "Test run" and "Execution log" sit side by
+# side in two columns with wildly different content lengths (a 5-row
+# table vs. a multi-hundred-line pytest log) -- a shared fixed height,
+# with the longer one scrolling inside it, keeps neither column lopsided.
+_EXECUTION_CARD_BODY_HEIGHT_PX = 360
+
 
 def _render_page_execution(state: UIState, data: dict) -> None:
     _render_page_header("Execution")
@@ -1933,7 +1932,14 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             ) + ui_components.table(
                 ["ID", "Scenario", "Result"], rows, row_classes=row_classes, col_widths=["44px", None, None]
             )
-        st.markdown(ui_components.card("Test run", body), unsafe_allow_html=True)
+        # Fixed height + scroll (live-check round), matched to the
+        # Execution log card alongside it, so neither column looks
+        # lopsided when one has far more content than the other.
+        st.markdown(
+            f'<div style="height:{_EXECUTION_CARD_BODY_HEIGHT_PX}px;overflow-y:auto;">'
+            f"{ui_components.card('Test run', body)}</div>",
+            unsafe_allow_html=True,
+        )
     with log_col, ui_components.widget_card_container("execution-log"):
         _card_heading("Execution log")
         log_path = controller.run_dir / "execution" / "pytest_output.log" if controller is not None else None
@@ -1947,7 +1953,9 @@ def _render_page_execution(state: UIState, data: dict) -> None:
             log_body = ui_components.code_block(
                 ui_components.log_highlight(log_path.read_text(encoding="utf-8", errors="replace"))
             )
-            st.html(log_body)
+            st.html(
+                f'<div style="height:{_EXECUTION_CARD_BODY_HEIGHT_PX}px;overflow-y:auto;">{log_body}</div>'
+            )
         else:
             st.markdown("<p>Real pytest output appears here after execution.</p>", unsafe_allow_html=True)
 
@@ -2034,7 +2042,13 @@ def _render_page_results(state: UIState, data: dict) -> None:
     coverage_text = f"{coverage['covered']}/{coverage['required']}" if coverage else "—"
     duration_s = round(results["duration_ms"] / 1000, 1)
 
-    st.markdown(
+    # st.html(), not st.markdown(): the KPI value's inline font-size style
+    # was still losing live -- the real cause is .aae-kpi-value's own
+    # raised-specificity CSS rule carrying !important, which (unlike a
+    # plain rule) DOES beat an inline style, and only matches inside
+    # [data-testid="stMarkdownContainer"] -- st.html() renders outside that
+    # container, so the rule can't match and the inline style wins outright.
+    st.html(
         ui_components.kpi_row(
             [
                 {"label": "Total tests", "value": str(total), "tone": "default"},
@@ -2043,8 +2057,7 @@ def _render_page_results(state: UIState, data: dict) -> None:
                 {"label": "Coverage", "value": coverage_text, "tone": "default"},
                 {"label": "Duration", "value": f"{duration_s}s", "tone": "default"},
             ]
-        ),
-        unsafe_allow_html=True,
+        )
     )
 
     results_rows = [

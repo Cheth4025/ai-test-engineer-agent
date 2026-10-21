@@ -334,12 +334,14 @@ def test_progress_escapes_label_and_sub():
 
 def test_progress_connector_shows_a_visible_arrow_glyph():
     # polish-2 live-check round: the connector line rendered but had no
-    # visible arrow glyph -- add one, inline-styled per the same
-    # reasoning as the KPI/code-block fixes above.
+    # visible arrow glyph; the glyph is now its own flex sibling sitting
+    # in the gap between steps -- never absolutely positioned on top of
+    # a circle (the earlier bug: it overlapped the next step's dot).
     steps = [{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}]
     result = uc.progress(steps)
     assert "→" in result
-    assert 'style="position:absolute' in result
+    assert '<span class="aae-progress-arrow" style="color:' in result
+    assert "position:absolute" not in result
 
 
 def test_progress_connector_arrow_is_teal_when_filled_grey_when_not():
@@ -347,6 +349,20 @@ def test_progress_connector_arrow_is_teal_when_filled_grey_when_not():
     not_filled = uc.progress([{"label": "A", "sub": "", "state": "future"}, {"label": "B", "sub": "", "state": "future"}])
     assert "#0D9488" in filled
     assert "#9CA7B4" in not_filled
+
+
+def test_progress_arrow_is_a_sibling_of_the_step_spans_not_nested_inside_one():
+    # polish-2 live-check round regression: the arrow must sit in the gap
+    # between two step elements, never inside either one's own span (which
+    # is what let it render on top of a circle before).
+    steps = [{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}]
+    result = uc.progress(steps)
+    first_step_close = result.index("</p></span>")  # label closes, then the step span itself closes
+    arrow_open = result.index('<span class="aae-progress-arrow"')
+    second_step_open = result.rindex('<span class="aae-progress-step">')
+    assert first_step_close < arrow_open < second_step_open
+    assert result.count('class="aae-progress-step"') == 2
+    assert result.count('class="aae-progress-arrow"') == 1
 
 
 # ---------------------------------------------------------------------------
@@ -607,16 +623,21 @@ def test_aae_css_rule_quote_has_explicit_13px_font_size():
     assert "line-height: 1.45" in rule_quote_block
 
 
-def test_aae_css_kpi_value_rules_use_higher_specificity():
-    # polish-2 group F16: live screenshots showed Results-page KPI numbers
-    # at ~16px despite .aae-kpi-value's source already saying 26px
-    # !important -- the same class of cascade-loss bug as the table/code
-    # fixes (Streamlit's own stMarkdownContainer/p rule has a more
-    # specific selector AND !important, so a plain .aae-kpi-value rule
-    # loses even with !important of its own). Same fix: raised
-    # specificity.
+def test_aae_css_kpi_value_rule_no_longer_fights_the_inline_style():
+    # polish-2 live-check round: group F16's raised-specificity fix (a
+    # .aae-kpi-value rule with font-size/font-weight !important) was itself
+    # the reason the KPI numbers STILL rendered small after kpi_row() got
+    # an inline style="font-size:30px..." -- a stylesheet !important beats
+    # an inline style with no !important of its own, regardless of
+    # specificity. font-size/weight must live ONLY in the inline style now
+    # (see test_kpi_row_value_has_inline_style); this rule keeps color/
+    # margin (which the inline style doesn't set) but must never reclaim
+    # font-size/font-weight, or it would cancel the inline fix again.
     assert '[data-testid="stMarkdownContainer"] .aae-kpi-value {' in uc.AAE_CSS
-    assert "font-size: 26px !important;" in uc.AAE_CSS
+    kpi_value_block = uc.AAE_CSS.split('[data-testid="stMarkdownContainer"] .aae-kpi-value {')[1].split("}")[0]
+    assert "font-size" not in kpi_value_block
+    assert "font-weight" not in kpi_value_block
+    assert "color: #0F1B2D !important;" in kpi_value_block
 
 
 def test_aae_css_code_block_rules_use_important_and_higher_specificity():

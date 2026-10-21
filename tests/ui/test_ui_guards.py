@@ -1021,9 +1021,26 @@ def test_execution_pending_count_zero_for_none_controller():
 
 # ---------------------------------------------------------------------------
 # progress_steps_for -- the Analysis page's 7-step tracker (Interpret/
-# Generate/Coverage/Decide/Approve/Execute/Report). Pure function over
-# controller.stage/workflow_state/pending_decision, same style as
-# can_execute etc.
+# Generate/Coverage/Decide/Approve/Execute/Report). polish-2 live-check
+# round: rebuilt from on-disk evidence (+ controller.busy/pending_decision
+# for which not-yet-done step is "current"), not a controller.stage lookup
+# table -- the old table reset every step to "future" the moment a run hit
+# BLOCKED/STOPPED/REJECTED, even ones that had genuinely already happened.
+#
+# controller.stage/workflow_state in real production NEVER actually equal
+# "INTERPRETING"/"GENERATING"/"SCORING"/"REMEDIATING"/"RESCORING" --
+# orchestration.py drives those via controller.set_stage(), which only
+# touches controller.tool_stage (the busy indicator's label), never
+# controller.stage/workflow_state/busy (see state.py's set_stage vs
+# set_workflow_state). Through that whole synchronous stretch,
+# workflow_state stays "PREPARING", stage stays None, and busy stays True
+# (RunController.__init__'s defaults) until the first real pause/halt or
+# AWAITING_APPROVAL. The old tests fabricated those stage strings directly
+# via set_workflow_state(stage=...) -- a test-only construction the real
+# control flow can't produce. These tests instead reproduce the real,
+# reachable combinations: workflow_state/stage left at their defaults,
+# busy=True, differentiated only by which evidence files already exist --
+# exactly what a mid-flight UI poll would actually observe.
 # ---------------------------------------------------------------------------
 
 _PROGRESS_LABELS = ["Interpret", "Generate", "Coverage", "Decide", "Approve", "Execute", "Report"]
@@ -1034,12 +1051,45 @@ def _states(steps: list[dict]) -> list[str]:
     return [s["state"] for s in steps]
 
 
-def _controller_at(tmp_path, workflow_state: str, stage: str, *, pending_tool: str | None = None) -> RunController:
-    controller = RunController("r1", tmp_path)
-    controller.set_workflow_state(workflow_state, stage=stage, busy=False)
-    if pending_tool is not None:
-        controller.set_pending_decision({"tool_name": pending_tool, "context": {}, "verdicts": {}})
-    return controller
+def _write_evidence(run_dir, name: str, content: str = "{}") -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / name).write_text(content)
+
+
+# A resolved (non-waiting) COVERAGE checkpoint row -- an AUTO/REUSED
+# standalone decisions.json record whose primary choice question has a
+# real answer. Shape matches decision_trace.build_decision_trace's own
+# contract (module docstring + _emit), not a guess.
+_COVERAGE_DECIDED_RECORD = {
+    "checkpoint": "COVERAGE",
+    "decision_source": "AUTO",
+    "route": "AUTO",
+    "selected_action": "ACCEPT_COVERAGE",
+    "per_question": [
+        {
+            "question": "coverage_action",
+            "answer": "ACCEPT_COVERAGE",
+            "confidence": 0.95,
+            "probabilities": {"ACCEPT_COVERAGE": 0.95, "REMEDIATE_GAP": 0.05},
+        }
+    ],
+}
+
+# A still-escalated (OUTCOME_WAITING) COVERAGE checkpoint row -- a DECIDER
+# record with route ESCALATED whose own primary question has no answer yet.
+_COVERAGE_WAITING_RECORD = {
+    "checkpoint": "COVERAGE",
+    "decision_source": "DECIDER",
+    "route": "ESCALATED",
+    "per_question": [
+        {
+            "question": "coverage_action",
+            "answer": None,
+            "confidence": 0.5,
+            "probabilities": {"ACCEPT_COVERAGE": 0.5, "REMEDIATE_GAP": 0.5},
+        }
+    ],
+}
 
 
 def test_progress_steps_for_none_controller_all_future():
@@ -1047,114 +1097,227 @@ def test_progress_steps_for_none_controller_all_future():
     assert _states(steps) == ["future"] * 7
 
 
-def test_progress_steps_for_interpreting(tmp_path):
-    controller = _controller_at(tmp_path, "PREPARING", "INTERPRETING")
+def test_progress_steps_for_interpreting_busy_before_interpretation_written(tmp_path):
+    controller = RunController("r1", tmp_path)  # defaults: PREPARING, stage None, busy True
     assert _states(ui.progress_steps_for(controller)) == ["current"] + ["future"] * 6
 
 
-def test_progress_steps_for_generating(tmp_path):
-    controller = _controller_at(tmp_path, "PREPARING", "GENERATING")
+def test_progress_steps_for_generating_busy_after_interpretation_written(tmp_path):
+    controller = RunController("r1", tmp_path)
+    _write_evidence(tmp_path, "interpretation.json")
     assert _states(ui.progress_steps_for(controller)) == ["done", "current"] + ["future"] * 5
 
 
-def test_progress_steps_for_scoring(tmp_path):
-    controller = _controller_at(tmp_path, "PREPARING", "SCORING")
-    assert _states(ui.progress_steps_for(controller)) == ["done", "done", "current"] + ["future"] * 4
-
-
-def test_progress_steps_for_remediating_and_rescoring_both_map_to_coverage(tmp_path):
-    for stage in ("REMEDIATING", "RESCORING"):
-        controller = _controller_at(tmp_path, "PREPARING", stage)
-        assert _states(ui.progress_steps_for(controller)) == ["done", "done", "current"] + ["future"] * 4
+def test_progress_steps_for_scoring_busy_still_shows_generate_current(tmp_path):
+    """Generate and Coverage become 'done' at the exact same real moment --
+    checkpoints.build_coverage_checkpoint's build_questions writes
+    scenarios_v{N}.json AND coverage_v{N}.json together (checkpoints.py
+    lines 282-283), synchronously, before the gate decides AUTO vs
+    ESCALATE -- there is no real persisted state where Generate is done
+    and Coverage isn't, so busy=True with only interpretation.json on disk
+    still shows Generate (not Coverage) current, identically to the
+    GENERATING case above."""
+    controller = RunController("r1", tmp_path)
+    _write_evidence(tmp_path, "interpretation.json")
+    assert _states(ui.progress_steps_for(controller)) == ["done", "current"] + ["future"] * 5
 
 
 def test_progress_steps_for_pending_generate_scenarios_decision(tmp_path):
-    controller = _controller_at(
-        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="generate_scenarios"
-    )
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    controller.set_pending_decision({"tool_name": "generate_scenarios", "context": {}, "verdicts": {}})
+    _write_evidence(tmp_path, "interpretation.json")
     steps = ui.progress_steps_for(controller)
-    assert _states(steps) == ["done", "done", "future", "current", "future", "future", "future"]
-    assert steps[3]["sub"] == "waiting for you"
+    assert _states(steps) == ["done", "current", "future", "future", "future", "future", "future"]
+    assert steps[1]["sub"] == "waiting for you"
 
 
 def test_progress_steps_for_pending_save_scenario_set_decision_matches_the_mock(tmp_path):
-    """The 05_analysis.png mock's concrete example: Interpret/Generate done,
-    Coverage done (4/5, gap found), Decide current with 'waiting for you'."""
-    controller = _controller_at(
-        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="save_scenario_set"
-    )
+    """The 05_analysis.png mock's concrete example: Interpret/Generate/
+    Coverage done, Decide current with 'waiting for you' -- scenarios_v1.json/
+    coverage_v1.json are already on disk by this point (written
+    unconditionally in build_questions before the gate ever decides to
+    escalate), and decisions.json already carries the escalated-but-
+    unanswered COVERAGE row."""
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    controller.set_pending_decision({"tool_name": "save_scenario_set", "context": {}, "verdicts": {}})
+    _write_evidence(tmp_path, "interpretation.json")
+    _write_evidence(tmp_path, "scenarios_v1.json")
+    _write_evidence(tmp_path, "coverage_v1.json")
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_WAITING_RECORD]))
     steps = ui.progress_steps_for(controller)
     assert _states(steps) == ["done", "done", "done", "current", "future", "future", "future"]
     assert steps[3]["sub"] == "waiting for you"
 
 
-def test_progress_steps_for_pending_finalize_analysis_decision_shows_report_current(tmp_path):
-    controller = _controller_at(
-        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="finalize_analysis"
-    )
+def test_progress_steps_for_pending_render_report_decision_shows_report_current(tmp_path):
+    """results.json already exists by the time finalize_analysis/
+    render_report's COMPLETION checkpoint can even be reached --
+    orchestration.py writes it right before the ANALYZING_RESULTS/
+    REPORTING stage transitions (orchestration.py line 394)."""
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    controller.set_pending_decision({"tool_name": "render_report", "context": {}, "verdicts": {}})
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json", "approval.json", "results.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
     steps = ui.progress_steps_for(controller)
-    assert _states(steps) == ["done", "done", "done", "done", "done", "done", "current"]
+    assert _states(steps) == ["done"] * 6 + ["current"]
     assert steps[6]["sub"] == "waiting for you"
 
 
-def test_progress_steps_for_pending_render_report_decision_shows_report_current(tmp_path):
-    controller = _controller_at(
-        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="render_report"
-    )
-    steps = ui.progress_steps_for(controller)
-    assert _states(steps) == ["done", "done", "done", "done", "done", "done", "current"]
-
-
 def test_progress_steps_for_awaiting_clarification(tmp_path):
-    controller = _controller_at(tmp_path, "AWAITING_CLARIFICATION", "AWAITING_CLARIFICATION")
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_CLARIFICATION", stage="AWAITING_CLARIFICATION", busy=False)
+    _write_evidence(tmp_path, "interpretation.json")
     steps = ui.progress_steps_for(controller)
     assert _states(steps) == ["done", "current", "future", "future", "future", "future", "future"]
     assert steps[1]["sub"] == "waiting for you"
 
 
 def test_progress_steps_for_awaiting_approval(tmp_path):
-    controller = _controller_at(tmp_path, "AWAITING_APPROVAL", "AWAITING_APPROVAL")
-    assert _states(ui.progress_steps_for(controller)) == ["done", "done", "done", "done", "current", "future", "future"]
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done", "done", "done", "done", "current", "future", "future"]
+    assert steps[4]["sub"] == "waiting for you"
 
 
 def test_progress_steps_for_approved_not_yet_executed(tmp_path):
-    controller = _controller_at(tmp_path, "APPROVED", "APPROVED")
-    assert _states(ui.progress_steps_for(controller)) == ["done"] * 5 + ["current", "future"]
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("APPROVED", stage="APPROVED", busy=False)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json", "approval.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done"] * 5 + ["current", "future"]
+    assert steps[5]["sub"] == "waiting for you"
 
 
 def test_progress_steps_for_executing(tmp_path):
-    controller = _controller_at(tmp_path, "EXECUTING", "EXECUTING")
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("EXECUTING", stage="EXECUTING", busy=True)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json", "approval.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
     assert _states(ui.progress_steps_for(controller)) == ["done"] * 5 + ["current", "future"]
 
 
 def test_progress_steps_for_analyzing_results(tmp_path):
-    controller = _controller_at(tmp_path, "ANALYZING_RESULTS", "ANALYZING_RESULTS")
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("ANALYZING_RESULTS", stage="ANALYZING_RESULTS", busy=True)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json", "approval.json", "results.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
     assert _states(ui.progress_steps_for(controller)) == ["done"] * 6 + ["current"]
 
 
 def test_progress_steps_for_reporting(tmp_path):
-    controller = _controller_at(tmp_path, "REPORTING", "REPORTING")
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("REPORTING", stage="REPORTING", busy=True)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json", "approval.json", "results.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
     assert _states(ui.progress_steps_for(controller)) == ["done"] * 6 + ["current"]
 
 
 def test_progress_steps_for_completed_all_done(tmp_path):
-    controller = _controller_at(tmp_path, "COMPLETED", "COMPLETED")
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("COMPLETED", stage="COMPLETED", busy=False)
+    for name in (
+        "interpretation.json",
+        "scenarios_v1.json",
+        "coverage_v1.json",
+        "approval.json",
+        "results.json",
+        "report.md",
+    ):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
     assert _states(ui.progress_steps_for(controller)) == ["done"] * 7
 
 
 def test_progress_steps_for_rejected_stops_after_approve(tmp_path):
-    controller = _controller_at(tmp_path, "REJECTED", "REJECTED")
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("REJECTED", stage="REJECTED", busy=False)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json", "approval.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
     assert _states(ui.progress_steps_for(controller)) == ["done"] * 5 + ["future", "future"]
 
 
-def test_progress_steps_for_blocked_position_unknown(tmp_path):
-    controller = _controller_at(tmp_path, "BLOCKED", "BLOCKED")
+def test_progress_steps_for_blocked_keeps_earlier_done_steps(tmp_path):
+    """polish-2 live-check round regression: a halt must never un-mark an
+    earlier step that genuinely already happened -- the old stage-table
+    mapping reset BLOCKED/STOPPED to all-future regardless of real
+    progress."""
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("BLOCKED", stage="BLOCKED", busy=False)
+    for name in ("interpretation.json", "scenarios_v1.json", "coverage_v1.json"):
+        _write_evidence(tmp_path, name)
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 4 + ["future"] * 3
+
+
+def test_progress_steps_for_stopped_with_no_evidence_yet_is_all_future(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("STOPPED", stage="STOPPED", busy=False)
     assert _states(ui.progress_steps_for(controller)) == ["future"] * 7
 
 
-def test_progress_steps_for_stopped_position_unknown(tmp_path):
-    controller = _controller_at(tmp_path, "STOPPED", "STOPPED")
-    assert _states(ui.progress_steps_for(controller)) == ["future"] * 7
+def test_progress_steps_for_monotonic_across_every_real_state(tmp_path):
+    """Walks one fixture run through every real state in order (including a
+    mid-run BLOCKED halt) and asserts no step ever reverts from done back
+    to not-done -- the live-check round's actual reported bug."""
+    controller = RunController("r1", tmp_path)
+    previous_done = [False] * 7
+
+    def _assert_monotonic_and_record():
+        nonlocal previous_done
+        states = _states(ui.progress_steps_for(controller))
+        done_now = [state == "done" for state in states]
+        for index, (was_done, is_done) in enumerate(zip(previous_done, done_now)):
+            assert is_done or not was_done, f"step {index} ({_PROGRESS_LABELS[index]}) regressed to {states[index]!r}"
+        previous_done = done_now
+
+    _assert_monotonic_and_record()  # PREPARING, busy, nothing written yet
+
+    _write_evidence(tmp_path, "interpretation.json")
+    _assert_monotonic_and_record()
+
+    _write_evidence(tmp_path, "scenarios_v1.json")
+    _write_evidence(tmp_path, "coverage_v1.json")
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_WAITING_RECORD]))
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    controller.set_pending_decision({"tool_name": "save_scenario_set", "context": {}, "verdicts": {}})
+    _assert_monotonic_and_record()
+
+    _write_evidence(tmp_path, "decisions.json", json.dumps([_COVERAGE_DECIDED_RECORD]))
+    controller.set_pending_decision(None)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    _assert_monotonic_and_record()
+
+    _write_evidence(tmp_path, "approval.json")
+    controller.set_workflow_state("EXECUTING", stage="EXECUTING", busy=True)
+    _assert_monotonic_and_record()
+
+    _write_evidence(tmp_path, "results.json")
+    controller.set_workflow_state("ANALYZING_RESULTS", stage="ANALYZING_RESULTS", busy=True)
+    _assert_monotonic_and_record()
+
+    controller.set_workflow_state("BLOCKED", stage="BLOCKED", busy=False)  # a halt mid-analysis
+    _assert_monotonic_and_record()
+
+    controller.set_workflow_state("REPORTING", stage="REPORTING", busy=True)  # resumed
+    _assert_monotonic_and_record()
+
+    _write_evidence(tmp_path, "report.md")
+    controller.set_workflow_state("COMPLETED", stage="COMPLETED", busy=False)
+    _assert_monotonic_and_record()
 
 
 # ---------------------------------------------------------------------------

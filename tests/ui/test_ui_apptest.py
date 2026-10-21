@@ -27,7 +27,7 @@ import pytest
 pytest.importorskip("streamlit.testing.v1")
 from streamlit.testing.v1 import AppTest
 
-from ai_test_engineer import orchestration
+from ai_test_engineer import orchestration, ui
 from ai_test_engineer.state import RunController
 
 
@@ -1795,6 +1795,31 @@ def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_pa
     assert "5/5 run · 4 passed · 1 failed · 0.4s" in markdown_text
 
 
+def test_execution_test_run_and_log_cards_share_a_fixed_scrollable_height(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 live-check round: "Test run" and "Execution log" must share
+    the same fixed height (the log scrolling inside it), so one column
+    doesn't tower over the other."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
+
+    height_style = f"height:{ui._EXECUTION_CARD_BODY_HEIGHT_PX}px;overflow-y:auto;"
+    markdown_text = " ".join(m.value for m in at.markdown)
+    html_text = " ".join(h.value for h in at.html)
+    assert height_style in markdown_text  # Test run card (still st.markdown)
+    assert height_style in html_text  # Execution log card (st.html, blank-line safe)
+    assert '<pre class="aae-code aae-code--text"' in html_text
+
+
 def test_results_downloads_render_before_the_kpi_row(monkeypatch, tmp_path, ui_script_path):
     """polish-2 group B5: the download buttons move to directly under the
     title/banners, right-aligned -- no longer at the very bottom of the
@@ -1857,11 +1882,16 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
     assert "Payment verification: FAILED" in markdown_text
     assert "aae-banner--verification-fail" in markdown_text
 
-    # KPI tiles (ui_components.kpi_row()) -- never previously tested.
-    assert "aae-kpi-row" in markdown_text
-    assert "Total tests" in markdown_text and ">5<" in markdown_text
-    assert "aae-kpi-value--passed" in markdown_text
-    assert "aae-kpi-value--failed" in markdown_text
+    # KPI tiles (ui_components.kpi_row()) -- rendered via st.html(), not
+    # st.markdown(): the .aae-kpi-value CSS rule's own !important would
+    # otherwise beat the inline font-size style inside stMarkdownContainer
+    # (polish-2 live-check round).
+    html_text = " ".join(h.value for h in at.html)
+    assert "aae-kpi-row" in html_text
+    assert "Total tests" in html_text and ">5<" in html_text
+    assert "aae-kpi-value--passed" in html_text
+    assert "aae-kpi-value--failed" in html_text
+    assert 'style="font-size:30px;font-weight:700;line-height:1.1"' in html_text
 
     assert "T01" in markdown_text and "T05" in markdown_text
     assert "1 ledger entry" in markdown_text  # T04 Expected
