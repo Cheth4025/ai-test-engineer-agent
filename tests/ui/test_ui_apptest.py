@@ -1113,6 +1113,8 @@ def test_scenarios_page_shows_coverage_donuts_before_and_after(monkeypatch, tmp_
 
 
 def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypatch, tmp_path, ui_script_path):
+    # polish-2 group D12: confidence now renders to 2 decimals everywhere
+    # conf_bar is used (was bare {:g} straight off decisions.json).
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_remediated_run(tmp_path, confidence=0.4242)
 
@@ -1120,11 +1122,11 @@ def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypa
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("0.4242" in m.value for m in a.markdown))
+    at = _settle(at, lambda a: any("0.42" in m.value for m in a.markdown))
 
     assert not at.exception
     markdown_text = " ".join(m.value for m in at.markdown)
-    assert "0.4242" in markdown_text
+    assert "0.42" in markdown_text
     assert "REMEDIATE_GAP" in markdown_text  # the real bounded choice, not "Confirm"/"Proceed"
 
 
@@ -1800,12 +1802,14 @@ def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path
     at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
-    at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
+    at = _settle(at, lambda a: any("Coverage v1" in m.value for m in a.markdown))
 
+    # polish-2 group D11: friendly checkpoint labels (Coverage v1/Failure/
+    # Completion), not the raw decisions.json enum strings.
     markdown_text = " ".join(m.value for m in at.markdown)
-    assert "COVERAGE" in markdown_text and "ACCEPT_COVERAGE" in markdown_text
-    assert "FAILURE" in markdown_text and "REPORT_FAILURE" in markdown_text
-    assert "COMPLETION" in markdown_text and "FINALIZE_RESULTS" in markdown_text
+    assert "Coverage v1" in markdown_text and "ACCEPT_COVERAGE" in markdown_text
+    assert "Failure" in markdown_text and "REPORT_FAILURE" in markdown_text
+    assert "Completion" in markdown_text and "FINALIZE_RESULTS" in markdown_text
 
 
 def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypatch, tmp_path, ui_script_path):
@@ -1828,12 +1832,15 @@ def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypa
     at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
-    at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
+    at = _settle(at, lambda a: any("Coverage v1" in m.value for m in a.markdown))
     ui_markdown_text = " ".join(m.value for m in at.markdown)
 
     decisions = json.loads((controller.run_dir / "decisions.json").read_text())
     decider_cfg = json.loads((Path(__file__).resolve().parents[2] / "config" / "decider.json").read_text())
-    expected_rows = decision_trace.build_decision_trace(decisions, decider_cfg)
+    # polish-2 group D11: label the rows the same way ui.py/reporting.py
+    # now do internally, so this cross-surface check compares what each
+    # surface actually renders (friendly labels), not the raw checkpoint.
+    expected_rows = decision_trace.label_decision_trace(decision_trace.build_decision_trace(decisions, decider_cfg))
     assert len(expected_rows) >= 3  # COVERAGE, FAILURE, COMPLETION -- the pairing collapsed nothing unexpected
 
     report_text = reporting.render_report(controller)["report_text"]
@@ -1842,8 +1849,10 @@ def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypa
         assert f"{row['icon']} {row['decision_text']}" in ui_markdown_text or row["decision_text"] in ui_markdown_text
         assert f"{row['icon']} {row['decision_text']}" in report_text
         if row["confidence"] is not None:
-            assert str(row["confidence"]) in ui_markdown_text
-            assert f"{row['confidence']} vs {row['threshold']}" in report_text
+            # polish-2 group D12: confidence renders to 2 decimals on both
+            # surfaces now (was a bare, unformatted float).
+            assert f"{row['confidence']:.2f}" in ui_markdown_text
+            assert f"{row['confidence']:.2f} vs {row['threshold']:.2f}" in report_text
 
 
 def test_results_page_evidence_tabs_and_downloads(monkeypatch, tmp_path, ui_script_path):

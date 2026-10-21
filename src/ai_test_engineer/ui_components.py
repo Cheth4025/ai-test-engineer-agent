@@ -114,6 +114,7 @@ def table(
     *,
     row_classes: list[str] | None = None,
     col_widths: list[str | None] | None = None,
+    fixed_layout: bool = False,
 ) -> str:
     """headers are leaf/plain text (escaped internally, since they're
     always short literal column titles). Each row cell is PRE-BUILT HTML
@@ -127,7 +128,13 @@ def table(
     table that shares .aae-table (tables differ in which column, if any,
     needs a fixed width -- there's no reliable way to target "the ID
     column" generically across tables via CSS alone, since column meaning
-    and position both vary table to table)."""
+    and position both vary table to table).
+
+    fixed_layout (polish-2 group D13): opt-in table-layout: fixed + wrapped
+    cell text (the .aae-table--fixed modifier class), for a table sitting
+    in a narrow card where the default table-layout: auto (every other
+    table's default -- sizes to content) would overflow instead of
+    wrapping."""
     if row_classes is not None and len(row_classes) != len(rows):
         raise ValueError(f"row_classes length {len(row_classes)} != rows length {len(rows)}")
     classes = row_classes if row_classes is not None else [""] * len(rows)
@@ -145,8 +152,9 @@ def table(
         class_attr = f' class="{html.escape(row_class)}"' if row_class else ""
         tds = "".join(f"<td>{cell}</td>" for cell in row)
         body_rows.append(f"<tr{class_attr}>{tds}</tr>")
+    table_class = "aae-table aae-table--fixed" if fixed_layout else "aae-table"
     return (
-        '<table class="aae-table">'
+        f'<table class="{table_class}">'
         f"{colgroup}"
         f"<thead><tr>{thead}</tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody>"
@@ -209,7 +217,7 @@ def conf_bar(confidence: float, threshold: float, *, width_px: int = 90) -> str:
         f'<span class="aae-conf-fill" style="width:{fill_pct:g}%;background:{fill_color};"></span>'
         f'<span class="aae-conf-tau" style="left:{tau_pct:g}%;"></span>'
         f"</span>"
-        f'<span class="aae-conf-value">{confidence:g}</span>'
+        f'<span class="aae-conf-value">{confidence:.2f}</span>'
         f"</span>"
     )
 
@@ -540,6 +548,19 @@ AAE_CSS = f"""
 .aae-row--fail {{ background-color: #FFF1F0; font-weight: 700; }}
 .aae-row--added {{ background-color: #EAF6F4; }}
 .aae-row--not-reached {{ color: #9CA7B4; }}
+/* polish-2 group D13: the decision-trace table, in a now-narrower card
+   (~2:3 split with the Failure card), wraps its cell text instead of
+   overflowing the card -- table-layout: auto (every other table's
+   default) sizes to content instead, which would push this one wider
+   than its card. */
+.block-container [data-testid="stMarkdownContainer"] .aae-table--fixed {{
+    table-layout: fixed !important;
+}}
+.block-container [data-testid="stMarkdownContainer"] .aae-table--fixed td,
+.block-container [data-testid="stMarkdownContainer"] .aae-table--fixed th {{
+    overflow-wrap: break-word;
+    word-break: break-word;
+}}
 
 /* -- Pills (generated from PILL_VARIANTS) -- */
 .aae-pill {{
@@ -849,7 +870,10 @@ def decision_trace_table(rows: list[dict]) -> str:
     table_rows = []
     row_classes = []
     for row in rows:
-        checkpoint_cell = escape(row["checkpoint"] or "—")
+        # label (polish-2 group D11, set by decision_trace.label_decision_
+        # trace): the friendly checkpoint name -- falls back to the raw
+        # checkpoint string for a caller that didn't label its rows.
+        checkpoint_cell = escape(row.get("label") or row["checkpoint"] or "—")
         decision_cell = escape(row["decision_text"] or "—")
         if row["confidence"] is not None and row["threshold"] is not None:
             confidence_cell = conf_bar(row["confidence"], row["threshold"])
@@ -862,10 +886,28 @@ def decision_trace_table(rows: list[dict]) -> str:
         else:
             variant = OUTCOME_PILL_VARIANT.get(outcome)
             outcome_cell = pill(outcome, variant) if variant else escape(outcome)
+        # detail (polish-2 group D12): the override/escalated-by-other-
+        # question explanation -- a title= tooltip on the Outcome cell,
+        # never glued onto the Decision cell as a long sentence.
+        detail = row.get("detail")
+        if detail:
+            # Attribute-value context -- html.escape()'s quote=True default,
+            # not this module's escape() (quote=False), same convention as
+            # labeled_section()'s label_class.
+            outcome_cell = f'<span title="{html.escape(detail)}">{outcome_cell}</span>'
 
         table_rows.append([checkpoint_cell, decision_cell, confidence_cell, outcome_cell])
         row_classes.append("aae-row--not-reached" if outcome == "not reached" else "")
-    return table(headers, table_rows, row_classes=row_classes)
+    # polish-2 group D13: fixed_layout + explicit col_widths so this table
+    # never overflows its card at the new, narrower ~2:5 width (the
+    # Results page's decider_col) -- wrapped text instead.
+    return table(
+        headers,
+        table_rows,
+        row_classes=row_classes,
+        col_widths=["86px", None, "100px", "100px"],
+        fixed_layout=True,
+    )
 
 
 def widget_card_container(name: str):

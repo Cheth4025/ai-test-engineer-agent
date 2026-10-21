@@ -89,6 +89,67 @@ def test_reused_record_is_its_own_row():
     assert rows[0]["outcome"] == decision_trace.OUTCOME_AUTO
 
 
+def test_reused_record_of_an_already_answered_checkpoint_does_not_add_a_stale_waiting_row():
+    """polish-2 D10 regression, real shape from runs/20261018T212639Z_
+    d5b23d26/decisions.json: a DECIDER+HUMAN_ESCALATION pair for
+    AMBIGUITY+STRATEGY resolves cleanly (one row, not waiting) -- then a
+    later REUSED record for the SAME checkpoint (the controller replaying
+    a cached decision for a retried generate_scenarios tool call) arrives
+    with route still ESCALATED and every per_question answer still null
+    (decision_record_reused() re-evaluates the gate's verdict fresh, which
+    still reports ESCALATE -- the human's resolution lives in the
+    HUMAN_ESCALATION record two entries back, not in this one). Before the
+    fix, this REUSED record fell through to the standalone-row branch,
+    whose decider_decision_value() found no answered primary question and
+    returned "Awaiting human" -- a second, stale ⏳ row for a checkpoint
+    that was, in fact, already answered."""
+    _COMMON_PER_QUESTION = [
+        {"question": "ambiguity_BR01", "answer": None, "suggestion": True, "confidence": 0.6808, "probabilities": {"true": 0.6808, "false": 0.3192}, "route": "ESCALATE"},
+        {"question": "strategy_action", "answer": None, "suggestion": "REQUEST_CLARIFICATION", "confidence": 0.4283, "probabilities": {"GENERATE_TESTS": 0.2859, "REQUEST_CLARIFICATION": 0.7141}, "route": "ESCALATE"},
+    ]
+    decider_record = {
+        "checkpoint": "AMBIGUITY+STRATEGY",
+        "selected_action": "Confirm",
+        "confidence": 0.6808,
+        "route": "ESCALATED",
+        "decision_source": "DECIDER",
+        "decision_status": "VALIDATED",
+        "per_question": _COMMON_PER_QUESTION,
+    }
+    human_record = {
+        "checkpoint": "AMBIGUITY+STRATEGY",
+        "selected_action": "GENERATE_TESTS",
+        "route": "ESCALATED",
+        "decision_source": "HUMAN_ESCALATION",
+        "decision_status": "VALIDATED",
+        "per_question": _COMMON_PER_QUESTION,
+    }
+    reused_record = {
+        "checkpoint": "AMBIGUITY+STRATEGY",
+        "selected_action": "Proceed",
+        "confidence": 0.6808,
+        "route": "ESCALATED",
+        "decision_source": "REUSED",
+        "decision_status": "VALIDATED",
+        "per_question": _COMMON_PER_QUESTION,
+        "reused_from_tool_use_id": "tooluse_5La7DlWZcTshkxW1queZE8",
+    }
+
+    rows = decision_trace.build_decision_trace([decider_record, human_record, reused_record], DECIDER_CFG)
+
+    ambiguity_rows = [row for row in rows if row["checkpoint"] == "AMBIGUITY+STRATEGY"]
+    assert len(ambiguity_rows) == 1
+    assert ambiguity_rows[0]["icon"] == "✅"
+    assert ambiguity_rows[0]["outcome"] != decision_trace.OUTCOME_WAITING
+    # The human's pick differs from the Decider's own suggestion
+    # (REQUEST_CLARIFICATION) -- real pre-existing behavior (now in
+    # "detail", not decision_text -- group D12), not part of this
+    # regression.
+    assert ambiguity_rows[0]["decision_text"] == "GENERATE_TESTS (human)"
+    assert ambiguity_rows[0]["override"] is True
+    assert "REQUEST_CLARIFICATION" in ambiguity_rows[0]["detail"]
+
+
 def test_noul_primary_question_threshold_is_noul_upper():
     """A hypothetical primary question whose probabilities are the noul
     {"true","false"} shape reads noul_upper, not choice_threshold."""
@@ -177,8 +238,13 @@ def test_human_override_of_decider_suggestion_is_marked():
     rows = decision_trace.build_decision_trace([decider, human], DECIDER_CFG)
 
     assert rows[0]["override"] is True
-    assert "override" in rows[0]["decision_text"]
-    assert "ACCEPT_COVERAGE" in rows[0]["decision_text"]  # names what was overridden
+    # polish-2 group D12: decision_text stays short (action + "(human)");
+    # the override explanation moved to its own "detail" field (the
+    # Outcome pill's tooltip/sub-text in the UI, a parenthetical in
+    # report.md), not folded into decision_text as a long sentence.
+    assert rows[0]["decision_text"] == "REMEDIATE_GAP (human)"
+    assert "override" in rows[0]["detail"]
+    assert "ACCEPT_COVERAGE" in rows[0]["detail"]  # names what was overridden
     assert rows[0]["outcome"] == decision_trace.OUTCOME_HUMAN_OVERRIDE
 
 
@@ -189,7 +255,7 @@ def test_human_agreeing_with_decider_suggestion_is_not_marked_override():
     rows = decision_trace.build_decision_trace([decider, human], DECIDER_CFG)
 
     assert rows[0]["override"] is False
-    assert "override" not in rows[0]["decision_text"]
+    assert rows[0]["detail"] is None
     assert rows[0]["outcome"] == decision_trace.OUTCOME_HUMAN_CONFIRMED
 
 
@@ -282,7 +348,10 @@ def test_escalated_by_other_question_suffix_when_primary_resolved_auto_but_batch
 
     assert len(rows) == 1
     row = rows[0]
-    assert row["decision_text"] == "ACCEPT_COVERAGE (escalated by rule-match/ambiguity questions)"
+    # polish-2 group D12: moved from a decision_text suffix to its own
+    # "detail" field, same as the override case.
+    assert row["decision_text"] == "ACCEPT_COVERAGE"
+    assert row["detail"] == "escalated by rule-match/ambiguity questions"
     assert row["outcome"] == decision_trace.OUTCOME_AUTO
     assert row["icon"] == "✅"
 
@@ -359,3 +428,44 @@ def test_pad_not_reached_rows_empty_input_appends_all_four():
     assert [row["checkpoint"] for row in padded] == decision_trace.ALL_CHECKPOINTS
     assert all(row["decision_text"] == "not reached" for row in padded)
     assert all(row["outcome"] == "not reached" for row in padded)
+
+
+# ---------------------------------------------------------------------------
+# label_decision_trace() -- polish-2 group D11: friendly checkpoint names,
+# shared by both renderers (ui.py and reporting.py) so they can't drift.
+# ---------------------------------------------------------------------------
+
+
+def _plain_row(checkpoint: str) -> dict:
+    return {
+        "checkpoint": checkpoint, "icon": "✅", "decision_text": "x", "detail": None,
+        "confidence": None, "threshold": None, "route": "AUTO", "source": "DECIDER",
+        "override": False, "outcome": decision_trace.OUTCOME_AUTO,
+    }
+
+
+def test_label_decision_trace_friendly_base_names():
+    rows = [_plain_row(cp) for cp in decision_trace.ALL_CHECKPOINTS]
+    labeled = decision_trace.label_decision_trace(rows)
+    assert [row["label"] for row in labeled] == ["Generate", "Coverage v1", "Failure", "Completion"]
+
+
+def test_label_decision_trace_second_coverage_occurrence_is_v2():
+    # COVERAGE can escalate twice in one run (pre- and post-remediation).
+    rows = [_plain_row("COVERAGE"), _plain_row("COVERAGE")]
+    labeled = decision_trace.label_decision_trace(rows)
+    assert [row["label"] for row in labeled] == ["Coverage v1", "Coverage v2"]
+
+
+def test_label_decision_trace_unknown_checkpoint_passes_through_unchanged():
+    # "Approval" (ui.py's synthetic row) and anything else not in
+    # _FRIENDLY_BASE -- never raises, just keeps its own name.
+    rows = [_plain_row("Approval")]
+    labeled = decision_trace.label_decision_trace(rows)
+    assert labeled[0]["label"] == "Approval"
+
+
+def test_label_decision_trace_never_mutates_the_input_rows():
+    rows = [_plain_row("COVERAGE")]
+    decision_trace.label_decision_trace(rows)
+    assert "label" not in rows[0]

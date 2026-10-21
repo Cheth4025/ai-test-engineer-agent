@@ -156,6 +156,20 @@ def test_table_without_col_widths_has_no_colgroup():
     assert "<colgroup>" not in result
 
 
+def test_table_fixed_layout_adds_modifier_class():
+    # polish-2 group D13: the Results-page decision-trace table needs
+    # table-layout: fixed + wrapped cell text so it never overflows its
+    # (now narrower, ~2:3 split) card -- opt-in per table, not global
+    # (other tables rely on table-layout: auto to size to their content).
+    result = uc.table(["ID"], [["T01"]], fixed_layout=True)
+    assert result.startswith('<table class="aae-table aae-table--fixed">')
+
+
+def test_table_without_fixed_layout_has_no_modifier_class():
+    result = uc.table(["ID"], [["T01"]])
+    assert "aae-table--fixed" not in result
+
+
 # ---------------------------------------------------------------------------
 # kpi_row()
 # ---------------------------------------------------------------------------
@@ -237,9 +251,13 @@ def test_conf_bar_amber_when_below_threshold():
     assert "#F59E0B" in result
 
 
-def test_conf_bar_includes_numeric_value():
+def test_conf_bar_formats_confidence_to_2_decimals():
+    # polish-2 group D12: confidence reads to 2 decimals everywhere
+    # conf_bar is used (the confirm-decision card and the decision-trace
+    # table) -- was bare {:g} (4 decimals straight off decisions.json).
     result = uc.conf_bar(0.6912, 0.75)
-    assert "0.6912" in result
+    assert "0.69" in result
+    assert "0.6912" not in result
 
 
 def test_conf_bar_respects_width_px():
@@ -504,12 +522,29 @@ def test_aae_css_banner_action_buttons_are_teal():
 # ---------------------------------------------------------------------------
 
 
-def _row(checkpoint, decision_text, confidence, threshold, outcome):
+def _row(checkpoint, decision_text, confidence, threshold, outcome, detail=None):
     return {
-        "checkpoint": checkpoint, "icon": "✅", "decision_text": decision_text,
+        "checkpoint": checkpoint, "icon": "✅", "decision_text": decision_text, "detail": detail,
         "confidence": confidence, "threshold": threshold, "route": "AUTO",
         "source": "DECIDER", "override": False, "outcome": outcome,
     }
+
+
+def test_decision_trace_table_outcome_detail_becomes_a_tooltip_not_a_long_decision_sentence():
+    # polish-2 group D12: a long override/escalated explanation lives in
+    # the Outcome pill's title= tooltip now, never appended onto
+    # decision_text.
+    rows = [_row("COVERAGE", "REMEDIATE_GAP (human)", 0.55, 0.75, "Human override", detail="override of Decider's 'ACCEPT_COVERAGE' suggestion")]
+    result = uc.decision_trace_table(rows)
+    assert "REMEDIATE_GAP (human)" in result
+    assert "override of Decider's" not in result.split("REMEDIATE_GAP (human)")[0]  # not glued onto Decision
+    assert 'title="override of Decider' in result
+
+
+def test_decision_trace_table_no_tooltip_when_no_detail():
+    rows = [_row("COVERAGE", "ACCEPT_COVERAGE (human)", 0.97, 0.75, "Human confirmed")]
+    result = uc.decision_trace_table(rows)
+    assert "title=" not in result
 
 
 def test_decision_trace_table_renders_checkpoint_and_decision_text():

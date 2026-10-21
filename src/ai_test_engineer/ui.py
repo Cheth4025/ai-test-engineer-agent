@@ -59,6 +59,7 @@ from ai_test_engineer.decision_trace import (
     build_decision_trace,
     decider_decision_value,
     decision_icon,
+    label_decision_trace,
     pad_not_reached_rows,
     primary_choice_confidence,
     round4,
@@ -1045,6 +1046,7 @@ def _approval_trace_row(approval: dict | None) -> dict | None:
         "checkpoint": "Approval",
         "icon": "✅" if approval["decision"] == "APPROVE" else "⛔",
         "decision_text": f"{approval['decision']} by {approval['reviewer']} at {approval['timestamp']}",
+        "detail": None,
         "confidence": None,
         "threshold": None,
         "route": None,
@@ -1452,7 +1454,9 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
                 )
 
     if controller is not None:
-        trace_rows = pad_not_reached_rows(build_decision_trace(data.get("decisions") or [], _decider_cfg()))
+        trace_rows = label_decision_trace(
+            pad_not_reached_rows(build_decision_trace(data.get("decisions") or [], _decider_cfg()))
+        )
         st.markdown(
             ui_components.card("Decision trace", ui_components.decision_trace_table(trace_rows)),
             unsafe_allow_html=True,
@@ -1635,9 +1639,9 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
         ),
         None,
     )
-    coverage_rows = [
-        row for row in build_decision_trace(data.get("decisions") or [], _decider_cfg()) if row["checkpoint"] == "COVERAGE"
-    ]
+    coverage_rows = label_decision_trace(
+        [row for row in build_decision_trace(data.get("decisions") or [], _decider_cfg()) if row["checkpoint"] == "COVERAGE"]
+    )
     if gap_entry is not None or coverage_rows:
         gap_col, decider_col = st.columns(2)
         if gap_entry is not None:
@@ -2002,7 +2006,10 @@ def _render_page_results(state: UIState, data: dict) -> None:
 
     analysis = data.get("analysis")
     has_failure = bool(analysis and analysis.get("has_failure"))
-    failure_col, decider_col = st.columns(2)
+    # polish-2 group D13: Failure narrower, decision-trace wider (~2:3),
+    # since the trace table (now table-layout: fixed, see decision_trace_
+    # table) needs the extra room more than the Failure card's prose does.
+    failure_col, decider_col = st.columns([2, 3])
     with failure_col:
         heading = f"Failure — {analysis['test_id']}" if has_failure else "Failure"
         if has_failure:
@@ -2019,7 +2026,7 @@ def _render_page_results(state: UIState, data: dict) -> None:
         st.markdown(ui_components.card(heading, failure_body, tone="failure"), unsafe_allow_html=True)
 
     with decider_col:
-        trace_rows = build_decision_trace(data.get("decisions") or [], _decider_cfg())
+        trace_rows = label_decision_trace(build_decision_trace(data.get("decisions") or [], _decider_cfg()))
         approval = _load_json(controller.run_dir / "approval.json")
         approval_row = _approval_trace_row(approval)
         if approval_row is not None:
