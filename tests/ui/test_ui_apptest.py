@@ -109,6 +109,27 @@ def _navigate(at: AppTest, nav_id: str) -> AppTest:
 # ---------------------------------------------------------------------------
 
 
+def test_overview_page_uses_teal_accent_cards_checklist_and_table_header(monkeypatch, tmp_path, ui_script_path):
+    # polish-2 group F15: Overview's four cards get a teal left-accent
+    # heading, the Business Rules table a teal header, and the two lists
+    # teal check/numbered icons instead of plain bullets/numbers.
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+
+    assert not at.exception
+    markdown_text = " ".join(m.value for m in at.markdown)
+    # The rendered class attribute, not the bare class name -- the
+    # injected <style> block legitimately contains the bare selector text
+    # too (same false-positive trap as Group B's KPI-row ordering test).
+    assert markdown_text.count('class="aae-card aae-card--teal-accent"') == 4
+    assert "aae-table--teal-header" in markdown_text
+    assert "aae-checklist" in markdown_text
+    assert "aae-numbered-steps" in markdown_text
+    assert "Handle payment timeouts and retries" in markdown_text
+    assert "Reads the requirement and extracts the rules" in markdown_text
+
+
 def test_app_loads_on_overview_with_nav_and_no_start_button(monkeypatch, tmp_path, ui_script_path):
     """Overview is static reference content only (polish-1): Start Analysis
     moved to the new Analysis nav item, which is now the 2nd of 5 pages."""
@@ -1788,6 +1809,11 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
     assert "BR06: Re-delivery" in markdown_text
     assert "Developer fix. The agent reports defects; it does not change code." in markdown_text
     assert "root cause" not in markdown_text.lower()
+
+    # polish-2 group F16: verdict banners carry their sub-lines now (were
+    # sub=None) -- matches 04_results.png's static copy under each banner.
+    assert "Every stage ran and every decision is on record." in markdown_text
+    assert "BR06 is violated — a real defect for the developer." in markdown_text
 
 
 def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path, ui_script_path):

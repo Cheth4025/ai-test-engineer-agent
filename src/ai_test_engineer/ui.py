@@ -1195,12 +1195,15 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
     # "The use case" and "Business rules" each span the full content width,
     # stacked vertically -- unlike "Key acceptance criteria"/"What the
     # agent does" below, which stay side by side.
+    # polish-2 group F15: teal left-accent heading on all four cards, a
+    # teal Business Rules table header, and teal check/numbered icons on
+    # the two lists ("accents, not heavy fills" -- backgrounds stay white).
     use_case_body = (
         ui_components.labeled_section("aae-label-problem", "PROBLEM", _USE_CASE_PROBLEM)
         + ui_components.labeled_section("aae-label-impact", "IMPACT", _USE_CASE_IMPACT)
         + ui_components.labeled_section("aae-label-mitigation", "MITIGATION", _USE_CASE_MITIGATION)
     )
-    st.markdown(ui_components.card("The use case", use_case_body), unsafe_allow_html=True)
+    st.markdown(ui_components.card("The use case", use_case_body, tone="teal-accent"), unsafe_allow_html=True)
 
     requirement = data["requirement"] or {}
     rules = parse_business_rules(requirement.get("text"))
@@ -1208,17 +1211,17 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
         [ui_components.escape(r["rule_id"]), ui_components.escape(r["label"]), ui_components.escape(r["description"])] for r in rules
     ]
     br_body = ui_components.table(
-        ["ID", "Rule", "Description"], br_rows, col_widths=["44px", None, None]
+        ["ID", "Rule", "Description"], br_rows, col_widths=["44px", None, None], header_variant="teal"
     ) + ui_components.small_caption("Loaded from the requirements catalog — wording follows the source file.")
-    st.markdown(ui_components.card("Business rules (BR01 – BR06)", br_body), unsafe_allow_html=True)
+    st.markdown(ui_components.card("Business rules (BR01 – BR06)", br_body, tone="teal-accent"), unsafe_allow_html=True)
 
     col3, col4 = st.columns(2)
     with col3:
-        criteria_body = "<ul>" + "".join(f"<li>{ui_components.escape(item)}</li>" for item in _ACCEPTANCE_CRITERIA) + "</ul>"
-        st.markdown(ui_components.card("Key acceptance criteria", criteria_body), unsafe_allow_html=True)
+        criteria_body = ui_components.checklist(_ACCEPTANCE_CRITERIA)
+        st.markdown(ui_components.card("Key acceptance criteria", criteria_body, tone="teal-accent"), unsafe_allow_html=True)
     with col4:
-        steps_body = "<ol>" + "".join(f"<li>{ui_components.escape(step)}</li>" for step in _AGENT_STEPS) + "</ol>"
-        st.markdown(ui_components.card("What the agent does", steps_body), unsafe_allow_html=True)
+        steps_body = ui_components.numbered_steps(_AGENT_STEPS)
+        st.markdown(ui_components.card("What the agent does", steps_body, tone="teal-accent"), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1951,17 +1954,30 @@ def _render_page_results(state: UIState, data: dict) -> None:
         else:
             st.button("Download evidence (.zip)", key="download_evidence_btn", icon=":material/lock:", disabled=True)
 
+    # polish-2 group F16: verdict banners carry their sub-lines now (were
+    # sub=None) -- static copy, same convention as Overview's verbatim
+    # text, paired with the same ok/not-ok the banner color already uses.
+    workflow_ok = workflow_status == "COMPLETED"
+    workflow_sub = (
+        "Every stage ran and every decision is on record."
+        if workflow_ok
+        else "The run did not complete — see the trace below."
+    )
+    verification_ok = verification_status == "PASSED"
+    verification_sub = (
+        "No payment defect was found."
+        if verification_ok
+        else "BR06 is violated — a real defect for the developer."
+    )
     banner_cols = st.columns(2)
     with banner_cols[0]:
         st.markdown(
-            ui_components.verdict(f"Agent workflow: {workflow_status}", None, ok=workflow_status == "COMPLETED"),
+            ui_components.verdict(f"Agent workflow: {workflow_status}", workflow_sub, ok=workflow_ok),
             unsafe_allow_html=True,
         )
     with banner_cols[1]:
         st.markdown(
-            ui_components.verdict(
-                f"Payment verification: {verification_status}", None, ok=verification_status == "PASSED"
-            ),
+            ui_components.verdict(f"Payment verification: {verification_status}", verification_sub, ok=verification_ok),
             unsafe_allow_html=True,
         )
 

@@ -62,7 +62,8 @@ PILL_VARIANTS: dict[str, tuple[str, str]] = {
     "new-in-version": ("#0D9488", "#FFFFFF"),
 }
 
-_CARD_TONES = {"default", "gap", "decider", "failure"}
+_CARD_TONES = {"default", "gap", "decider", "failure", "teal-accent"}
+_TABLE_HEADER_VARIANTS = {"default", "teal"}
 _PROGRESS_STATES = {"done", "current", "future"}
 _KPI_TONES = {"default", "passed", "failed"}
 _BANNER_VARIANTS = {"workflow-ok", "verification-fail", "action-needed"}
@@ -115,6 +116,7 @@ def table(
     row_classes: list[str] | None = None,
     col_widths: list[str | None] | None = None,
     fixed_layout: bool = False,
+    header_variant: str = "default",
 ) -> str:
     """headers are leaf/plain text (escaped internally, since they're
     always short literal column titles). Each row cell is PRE-BUILT HTML
@@ -134,12 +136,19 @@ def table(
     cell text (the .aae-table--fixed modifier class), for a table sitting
     in a narrow card where the default table-layout: auto (every other
     table's default -- sizes to content) would overflow instead of
-    wrapping."""
+    wrapping.
+
+    header_variant (polish-2 group F15): "teal" tints just this table's
+    header row (#E6F2F1/#0B5F57, Overview's Business Rules table) via the
+    .aae-table--teal-header modifier class -- opt-in, since most tables
+    keep the neutral grey header."""
     if row_classes is not None and len(row_classes) != len(rows):
         raise ValueError(f"row_classes length {len(row_classes)} != rows length {len(rows)}")
     classes = row_classes if row_classes is not None else [""] * len(rows)
     if col_widths is not None and len(col_widths) != len(headers):
         raise ValueError(f"col_widths length {len(col_widths)} != headers length {len(headers)}")
+    if header_variant not in _TABLE_HEADER_VARIANTS:
+        raise ValueError(f"unknown table header_variant {header_variant!r}")
 
     colgroup = ""
     if col_widths is not None:
@@ -152,7 +161,12 @@ def table(
         class_attr = f' class="{html.escape(row_class)}"' if row_class else ""
         tds = "".join(f"<td>{cell}</td>" for cell in row)
         body_rows.append(f"<tr{class_attr}>{tds}</tr>")
-    table_class = "aae-table aae-table--fixed" if fixed_layout else "aae-table"
+    table_classes = ["aae-table"]
+    if fixed_layout:
+        table_classes.append("aae-table--fixed")
+    if header_variant == "teal":
+        table_classes.append("aae-table--teal-header")
+    table_class = " ".join(table_classes)
     return (
         f'<table class="{table_class}">'
         f"{colgroup}"
@@ -316,6 +330,25 @@ def small_caption(text: str) -> str:
     under-card caption (distinct from the page subtitle, which stays a
     plain st.caption call)."""
     return f'<p class="aae-caption">{escape(text)}</p>'
+
+
+def checklist(items: list[str]) -> str:
+    """Leaf helper: each item is raw/plain text, escaped internally.
+    Overview's "Key acceptance criteria" -- a teal check bullet per item
+    instead of a plain <ul> (polish-2 group F15)."""
+    rows = "".join(f'<li><span class="aae-checklist-icon">✓</span>{escape(item)}</li>' for item in items)
+    return f'<ul class="aae-checklist">{rows}</ul>'
+
+
+def numbered_steps(items: list[str]) -> str:
+    """Leaf helper: each item is raw/plain text, escaped internally.
+    Overview's "What the agent does" -- a teal numbered circle per item
+    instead of a plain <ol> (polish-2 group F15)."""
+    rows = "".join(
+        f'<li><span class="aae-numbered-steps-icon">{index}</span>{escape(item)}</li>'
+        for index, item in enumerate(items, start=1)
+    )
+    return f'<ol class="aae-numbered-steps">{rows}</ol>'
 
 
 def _pill_css() -> str:
@@ -497,11 +530,20 @@ AAE_CSS = f"""
 .aae-card--decider {{ background-color: #F8F5FF; border-color: #C9B8F0; }}
 .aae-card--decider .aae-card-heading {{ color: #4B2A9B !important; }}
 .aae-card--failure {{ border-color: #F1B8B2; }}
+/* polish-2 group F15: a teal left-accent heading, not a background tint
+   (background stays white -- "accents, not heavy fills"). */
+.aae-card--teal-accent {{ border-left: 4px solid {_CONF_TEAL}; }}
+.aae-card--teal-accent .aae-card-heading {{ color: #0B5F57 !important; }}
 .aae-rule-quote {{
     background-color: #FFF7E0;
     color: #5A3E00;
     border-radius: 6px;
     padding: 7px 9px;
+    /* polish-2 group F16: a bare <div>, not a <p> -- the global 13px/1.45
+       body rule only targets p/li/etc., so this fell back to Streamlit's
+       markdown default (larger than every other body-text element). */
+    font-size: 13px;
+    line-height: 1.45;
 }}
 
 /* -- Overview labels -- */
@@ -515,6 +557,40 @@ AAE_CSS = f"""
 .aae-label-impact {{ color: #B54708; }}
 .aae-label-mitigation {{ color: #0B766C; }}
 .aae-label-body {{ margin: 2px 0 10px 0 !important; }}
+
+/* polish-2 group F15: Overview's "Key acceptance criteria"/"What the
+   agent does" lists, with a teal check/numbered-circle icon per item
+   instead of a plain browser bullet/number. */
+.aae-checklist, .aae-numbered-steps {{
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}}
+.aae-checklist li, .aae-numbered-steps li {{
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 6px 0 !important;
+    padding: 0 !important;
+}}
+.aae-checklist-icon {{
+    color: {_CONF_TEAL};
+    font-weight: 700;
+    flex: 0 0 auto;
+}}
+.aae-numbered-steps-icon {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: {_CONF_TEAL};
+    color: #FFFFFF;
+    font-size: 10.5px;
+    font-weight: 700;
+    flex: 0 0 auto;
+}}
 
 /* -- Table -- raised specificity ([data-testid="stMarkdownContainer"]
    .aae-table ...) plus !important on size/spacing: Streamlit's own
@@ -560,6 +636,12 @@ AAE_CSS = f"""
 .block-container [data-testid="stMarkdownContainer"] .aae-table--fixed th {{
     overflow-wrap: break-word;
     word-break: break-word;
+}}
+/* polish-2 group F15: Overview's Business Rules table header, tinted
+   teal instead of the neutral grey every other table keeps. */
+.block-container [data-testid="stMarkdownContainer"] .aae-table--teal-header th {{
+    background-color: #E6F2F1 !important;
+    color: #0B5F57 !important;
 }}
 
 /* -- Pills (generated from PILL_VARIANTS) -- */
@@ -607,7 +689,16 @@ AAE_CSS = f"""
     padding: 14px 16px;
 }}
 .aae-kpi-label {{ font-size: 11.5px !important; font-weight: 600 !important; color: #4A5868 !important; margin: 0 !important; }}
-.aae-kpi-value {{ font-size: 26px !important; font-weight: 700 !important; color: #0F1B2D !important; margin: 2px 0 !important; }}
+/* polish-2 group F16: raised specificity, same reason/technique as the
+   table/code fixes -- a plain .aae-kpi-value rule, even with its own
+   !important, still lost to Streamlit's own stMarkdownContainer/p rule
+   (confirmed live: KPI numbers rendered at ~16px, not 26px). */
+.block-container [data-testid="stMarkdownContainer"] .aae-kpi-value {{
+    font-size: 26px !important;
+    font-weight: 700 !important;
+    color: #0F1B2D !important;
+    margin: 2px 0 !important;
+}}
 .aae-kpi-value--passed {{ color: #11602E !important; }}
 .aae-kpi-value--failed {{ color: #B42318 !important; }}
 .aae-kpi-sub {{ font-size: 11.5px !important; color: #5B6878 !important; margin: 0 !important; }}

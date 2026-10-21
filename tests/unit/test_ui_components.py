@@ -103,6 +103,14 @@ def test_card_rejects_unknown_tone():
         uc.card("Heading", "body", tone="not-a-real-tone")
 
 
+def test_card_teal_accent_tone_adds_modifier_class():
+    # polish-2 group F15: Overview's four cards get a teal left-accent
+    # heading (not a full background tint like gap/decider -- "accents,
+    # not heavy fills").
+    result = uc.card("Heading", "body", tone="teal-accent")
+    assert "aae-card--teal-accent" in result
+
+
 # ---------------------------------------------------------------------------
 # table()
 # ---------------------------------------------------------------------------
@@ -168,6 +176,24 @@ def test_table_fixed_layout_adds_modifier_class():
 def test_table_without_fixed_layout_has_no_modifier_class():
     result = uc.table(["ID"], [["T01"]])
     assert "aae-table--fixed" not in result
+
+
+def test_table_teal_header_variant_adds_modifier_class():
+    # polish-2 group F15: Overview's Business Rules table gets a teal-
+    # tinted header row (#E6F2F1/#0B5F57) -- opt-in, not a global table()
+    # change (every other table keeps the neutral grey header).
+    result = uc.table(["ID"], [["T01"]], header_variant="teal")
+    assert result.startswith('<table class="aae-table aae-table--teal-header">')
+
+
+def test_table_default_header_variant_has_no_modifier_class():
+    result = uc.table(["ID"], [["T01"]])
+    assert "aae-table--teal-header" not in result
+
+
+def test_table_rejects_unknown_header_variant():
+    with pytest.raises(ValueError):
+        uc.table(["ID"], [["T01"]], header_variant="not-a-real-variant")
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +391,26 @@ def test_labeled_section_escapes_both_params():
 def test_small_caption_escapes_text():
     result = uc.small_caption(UNSAFE_TEXT)
     assert ESCAPED_UNSAFE_TEXT in result
-    assert '<p class="aae-caption">' in result
+
+
+def test_checklist_renders_teal_check_items_escaped():
+    # polish-2 group F15: Overview's "Key acceptance criteria" list gets
+    # teal check bullets instead of a plain <ul>.
+    result = uc.checklist(["Handle timeouts", UNSAFE_TEXT])
+    assert "aae-checklist" in result
+    assert "Handle timeouts" in result
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result
+
+
+def test_numbered_steps_renders_teal_numbered_items_escaped():
+    # polish-2 group F15: Overview's "What the agent does" list gets teal
+    # numbered circles instead of a plain <ol>.
+    result = uc.numbered_steps(["Reads the requirement.", UNSAFE_TEXT])
+    assert "aae-numbered-steps" in result
+    assert "Reads the requirement." in result
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +514,29 @@ def test_aae_css_table_rules_use_important_and_higher_specificity():
     assert '[data-testid="stMarkdownContainer"] .aae-table th {' in uc.AAE_CSS
     assert '[data-testid="stMarkdownContainer"] .aae-table td {' in uc.AAE_CSS
     assert "font-size: 12.5px !important;\n    line-height: 1.35 !important;" in uc.AAE_CSS
+
+
+def test_aae_css_rule_quote_has_explicit_13px_font_size():
+    # polish-2 group F16: .aae-rule-quote is a bare <div>, not a <p>, so
+    # the global 13px/1.45 body rule (which only targets p/li/etc.) never
+    # applied to it -- it fell back to Streamlit's markdown default,
+    # rendering larger than every other body-text element on the page.
+    assert ".aae-rule-quote {" in uc.AAE_CSS
+    rule_quote_block = uc.AAE_CSS.split(".aae-rule-quote {")[1].split("}")[0]
+    assert "font-size: 13px" in rule_quote_block
+    assert "line-height: 1.45" in rule_quote_block
+
+
+def test_aae_css_kpi_value_rules_use_higher_specificity():
+    # polish-2 group F16: live screenshots showed Results-page KPI numbers
+    # at ~16px despite .aae-kpi-value's source already saying 26px
+    # !important -- the same class of cascade-loss bug as the table/code
+    # fixes (Streamlit's own stMarkdownContainer/p rule has a more
+    # specific selector AND !important, so a plain .aae-kpi-value rule
+    # loses even with !important of its own). Same fix: raised
+    # specificity.
+    assert '[data-testid="stMarkdownContainer"] .aae-kpi-value {' in uc.AAE_CSS
+    assert "font-size: 26px !important;" in uc.AAE_CSS
 
 
 def test_aae_css_code_block_rules_use_important_and_higher_specificity():
