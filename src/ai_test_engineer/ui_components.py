@@ -235,6 +235,13 @@ def progress(steps: list[dict]) -> str:
     return f'<div class="aae-progress">{"".join(dots)}</div>'
 
 
+def busy_indicator(label: str) -> str:
+    """Leaf helper: label is plain text, escaped internally. A small
+    pulsing dot + text -- rendered at the top of every page only while
+    state.worker_busy is True (see ui.py's per-page call)."""
+    return f'<div class="aae-busy"><span class="aae-busy-dot"></span>{escape(label)}</div>'
+
+
 def code_block(text_html: str, *, language: str = "text") -> str:
     """text_html is pre-built HTML (already escaped, and already
     keyword/status-highlighted by gherkin_highlight()/log_highlight() if
@@ -701,6 +708,34 @@ AAE_CSS = f"""
     z-index: -1;
 }}
 .aae-progress-connector--filled {{ background-color: #2DD4BF; }}
+
+/* -- Busy indicator (polish-2 group A3): shown at the top of every page
+   only while state.worker_busy is True. Pure CSS pulse -- no spinner
+   image/library -- and respects prefers-reduced-motion by freezing the
+   animation rather than hiding the indicator (it's still informative
+   without the motion). */
+.aae-busy {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    color: #0B5F57;
+    margin: 0 0 12px 0;
+}}
+.aae-busy-dot {{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: {_CONF_TEAL};
+    animation: aae-pulse 1.1s ease-in-out infinite;
+}}
+@keyframes aae-pulse {{
+    0%, 100% {{ opacity: 1; transform: scale(1); }}
+    50% {{ opacity: 0.35; transform: scale(0.7); }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+    .aae-busy-dot {{ animation: none; }}
+}}
 
 /* -- Main content: fill the page -- */
 .block-container {{

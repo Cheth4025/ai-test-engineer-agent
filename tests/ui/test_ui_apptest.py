@@ -159,6 +159,89 @@ def test_sidebar_navigation_reaches_all_five_pages_with_right_titles(monkeypatch
         assert at.title[0].value == title
 
 
+def test_all_five_pages_render_without_exception_across_fixture_states(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 no-regression guardrail #4: after every group's commit, all
+    5 pages must render without exception across pre-run, mid-run (a
+    pending Decider decision plus an unresolved rule-match item together,
+    the real shape save_scenario_set escalations produce), approved, and
+    completed. Not a content assertion -- test_sidebar_navigation_reaches_
+    all_five_pages_with_right_titles already checks titles on the fresh
+    state; this is the smoke net for every other state the branch touches."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+
+    nav_ids = ("requirements", "analysis", "scenarios", "execution", "results")
+
+    # 1. Pre-run.
+    at = _app(ui_script_path)
+    at.run()
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"pre-run/{nav_id}"
+
+    # 2. Mid-run: a pending COVERAGE decision plus an unresolved rule-match
+    # item in the same verdicts batch (grounding_S03 escalated, not just
+    # coverage_action -- the real combined shape).
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path / "mid"))
+    verdicts = {
+        "grounding_S03": {
+            "answer": None,
+            "suggestion": True,
+            "confidence": 0.51,
+            "probabilities": {"true": 0.51, "false": 0.49},
+            "route": "ESCALATE",
+        },
+        "coverage_action": {
+            "answer": None,
+            "suggestion": "REMEDIATE_GAP",
+            "confidence": 0.55,
+            "probabilities": {"ACCEPT_COVERAGE": 0.45, "REMEDIATE_GAP": 0.55},
+            "route": "ESCALATE",
+        },
+    }
+    paused_result = _register_paused_run(tmp_path / "mid", "run-1", "save_scenario_set", verdicts=verdicts)
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+    controller.save_evidence(
+        "grounding_v1.json",
+        {
+            "scenario_set_version": 1,
+            "items": [{"scenario_id": "S03", "verdict": "NEEDS_REVIEW", "confidence": 0.51, "human_resolution": None}],
+        },
+    )
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"mid-run/{nav_id}"
+
+    # 3. Approved.
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path / "approved"))
+    controller = _register_approved_run(tmp_path / "approved")
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"approved/{nav_id}"
+
+    # 4. Completed.
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path / "completed"))
+    controller = _register_completed_run(tmp_path / "completed")
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"completed/{nav_id}"
+
+
 def test_navigating_never_calls_orchestration_entry_points(monkeypatch, tmp_path, ui_script_path):
     """Selecting a sidebar page is read-only, exactly like the former
     st.tabs -- it must never call either orchestration entry point."""
@@ -1222,6 +1305,233 @@ def test_execute_button_unlocks_when_approved(monkeypatch, tmp_path, ui_script_p
 
     assert next(b for b in at.button if b.label == "Execute").disabled is False
     assert any("Ready to execute" in w.value for w in at.sidebar.warning)
+
+
+# ---------------------------------------------------------------------------
+# polish-2 Group A: FAILURE/COMPLETION decisions move onto Execution,
+# inline below the Approval/Execute card; confirming COMPLETION auto-
+# navigates to Results; a busy indicator shows only while a worker runs.
+# ---------------------------------------------------------------------------
+
+
+def _register_run_pending_failure_decision(tmp_path) -> RunController:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "approval.json").write_text(
+        json.dumps({"decision": "APPROVE", "reviewer": "Chethan", "comment": None, "timestamp": "2026-10-18T19:00:00Z"})
+    )
+    results = {
+        "execution_id": "run-1",
+        "return_code": 1,
+        "duration_ms": 400,
+        "tests": [
+            {"test_id": "T04", "scenario_id": "S04", "rule_ids": ["BR06"], "status": "FAIL", "duration_ms": 5, "expected": "1 ledger entry", "actual": "2 ledger entries", "failure_message": "assert 2 == 1", "evidence_reference": "execution/T04_evidence.json"},
+        ],
+        "junit_reference": "execution/junit.xml",
+        "log_reference": "execution/pytest_output.log",
+    }
+    (run_dir / "results.json").write_text(json.dumps(results))
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    # The escalation happens mid-tool-call, inside finalize_analysis's own
+    # processing -- tool_stage is already ANALYZING_RESULTS while paused
+    # here, same as a real run (orchestration.py sets it before the gated
+    # call that can escalate).
+    controller.set_stage("ANALYZING_RESULTS", orchestration.STAGE_TOOLS["ANALYZING_RESULTS"])
+    controller.set_pending_decision(
+        {
+            "tool_name": "finalize_analysis",
+            "context": {},
+            "verdicts": {
+                "failure_action": {
+                    "answer": None,
+                    "suggestion": "REPORT_FAILURE",
+                    "confidence": 0.28,
+                    "probabilities": {"INVESTIGATE_FAILURE": 0.72, "REPORT_FAILURE": 0.28},
+                    "route": "ESCALATE",
+                }
+            },
+            "escalation_seq": 1,
+        }
+    )
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def _register_run_pending_completion_decision(tmp_path) -> RunController:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "approval.json").write_text(
+        json.dumps({"decision": "APPROVE", "reviewer": "Chethan", "comment": None, "timestamp": "2026-10-18T19:00:00Z"})
+    )
+    results = {
+        "execution_id": "run-1",
+        "return_code": 1,
+        "duration_ms": 412,
+        "tests": [
+            {"test_id": "T04", "scenario_id": "S04", "rule_ids": ["BR06"], "status": "FAIL", "duration_ms": 5, "expected": "1 ledger entry", "actual": "2 ledger entries", "failure_message": "assert 2 == 1", "evidence_reference": "execution/T04_evidence.json"},
+        ],
+        "junit_reference": "execution/junit.xml",
+        "log_reference": "execution/pytest_output.log",
+    }
+    (run_dir / "results.json").write_text(json.dumps(results))
+    (run_dir / "analysis.json").write_text(
+        json.dumps(
+            {
+                "has_failure": True,
+                "test_id": "T04",
+                "rule_ids": ["BR06"],
+                "classification": "BUSINESS_RULE_VIOLATION",
+                "expected_behavior": "BR06: Re-delivery must not create another ledger posting.",
+                "actual_behavior": "Observed 2 ledger entries instead of 1.",
+                "impact": [],
+                "evidence_references": ["execution/T04_evidence.json"],
+                "handling_action": "REPORT_FAILURE",
+                "investigated": False,
+            }
+        )
+    )
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    # Same reasoning as _register_run_pending_failure_decision: tool_stage
+    # is already REPORTING while paused mid-render_report.
+    controller.set_stage("REPORTING", orchestration.STAGE_TOOLS["REPORTING"])
+    controller.set_pending_decision(
+        {
+            "tool_name": "render_report",
+            "context": {},
+            "verdicts": {
+                "completion_action": {
+                    "answer": None,
+                    "suggestion": "FINALIZE_RESULTS",
+                    "confidence": 0.69,
+                    "probabilities": {"FINALIZE_RESULTS": 0.69, "NOT_READY": 0.31},
+                    "route": "ESCALATE",
+                }
+            },
+            "escalation_seq": 1,
+        }
+    )
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def test_failure_decision_renders_inline_on_execution_not_analysis(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_failure_decision(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    assert not at.exception
+    assert _has_label(at, "radio", "Your choice")
+    assert any(b.label == "Confirm decision" for b in at.button)
+
+    at = _navigate(at, "analysis")
+    assert not at.exception
+    assert not _has_label(at, "radio", "Your choice")
+    assert not any(b.label == "Confirm decision" for b in at.button)
+
+
+def test_completion_decision_renders_inline_on_execution_not_analysis(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_completion_decision(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    assert not at.exception
+    assert _has_label(at, "radio", "Your choice")
+    assert any(b.label == "Confirm decision" for b in at.button)
+
+    at = _navigate(at, "analysis")
+    assert not at.exception
+    assert not _has_label(at, "radio", "Your choice")
+    assert not any(b.label == "Confirm decision" for b in at.button)
+
+
+def test_confirming_completion_decision_auto_navigates_to_results(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_completion_decision(tmp_path)
+    monkeypatch.setattr(
+        orchestration,
+        "resume_pending_decision",
+        lambda run_id, choice: {"run_id": run_id, "workflow_state": "COMPLETED", "stage": "COMPLETED"},
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("FINALIZE_RESULTS").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()
+    at = _settle(at, lambda a: a.title[0].value == "Results")
+
+    assert not at.exception
+    assert at.title[0].value == "Results"
+
+
+def test_confirming_failure_decision_does_not_auto_navigate(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_failure_decision(tmp_path)
+    monkeypatch.setattr(
+        orchestration,
+        "resume_pending_decision",
+        lambda run_id, choice: {"run_id": run_id, "workflow_state": "AWAITING_DECISION_CONFIRMATION", "stage": "AWAITING_DECISION_CONFIRMATION"},
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("REPORT_FAILURE").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()
+    time.sleep(0.1)
+    at.run()
+
+    assert not at.exception
+    assert at.title[0].value == "Execution"
+
+
+def test_busy_indicator_shown_only_while_worker_busy(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_completion_decision(tmp_path)
+    release = threading.Event()
+
+    def slow_resume(run_id: str, choice: str) -> dict:
+        release.wait(timeout=2)
+        return {"run_id": run_id, "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+
+    monkeypatch.setattr(orchestration, "resume_pending_decision", slow_resume)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    assert not any("Agent working" in m.value for m in at.markdown)
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("FINALIZE_RESULTS").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()  # worker_busy=True now
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Agent working" in markdown_text
+    assert "Finalizing the report" in markdown_text
+
+    release.set()
+    at = _settle(at, lambda a: not any("Agent working" in m.value for m in a.markdown))
+    assert not any("Agent working" in m.value for m in at.markdown)
 
 
 def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_path, ui_script_path):

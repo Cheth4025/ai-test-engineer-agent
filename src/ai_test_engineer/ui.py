@@ -88,16 +88,25 @@ NAV_LABELS = {item_id: label for item_id, label, _icon in NAV_ITEMS}
 
 # Which page owns the Confirm decision control for a given pending
 # checkpoint tool -- the sidebar points the user there when a decision is
-# awaiting confirmation but they're looking at a different page. All four
-# now point at Analysis (polish-1): Start Analysis, every Confirm-decision
-# control, and rule-match (grounding) resolution all moved there from
-# Overview/Scenarios/Execution.
+# awaiting confirmation but they're looking at a different page. Start
+# Analysis, Generate/Coverage decisions, and rule-match (grounding)
+# resolution live on Analysis (polish-1); Failure/Completion decisions
+# live inline on Execution, directly below the Approval/Execute card
+# (polish-2 group A) -- they're read naturally right after the test run
+# they're about, not on a separate page.
 PENDING_SECTION_FOR_TOOL = {
     "generate_scenarios": "analysis",
     "save_scenario_set": "analysis",
-    "finalize_analysis": "analysis",
-    "render_report": "analysis",
+    "finalize_analysis": "execution",
+    "render_report": "execution",
 }
+
+# Tool names whose Confirm-decision control renders on the Analysis page
+# vs. inline on Execution -- both _render_page_analysis and
+# _render_page_execution filter controller.pending_decision by this split
+# so the SAME pending decision is never rendered (and answerable) twice.
+_ANALYSIS_DECISION_TOOLS = {"generate_scenarios", "save_scenario_set"}
+_EXECUTION_DECISION_TOOLS = {"finalize_analysis", "render_report"}
 
 # Doc 06's escalation checkpoints and their fixed option sets -- same mapping
 # scripts/run_initial_pass.py._options_for hardcodes. Presentation only
@@ -920,6 +929,32 @@ def _render_page_header(title: str) -> None:
     st.caption("Payment Retry & Duplicate Charge Prevention")
 
 
+# controller.tool_stage's real values (orchestration.STAGE_TOOLS' keys) to
+# a human label for the busy indicator -- polish-2 group A3.
+STAGE_LABEL = {
+    "INTERPRETING": "Interpreting the requirement",
+    "GENERATING": "Generating scenarios",
+    "SCORING": "Scoring coverage",
+    "REMEDIATING": "Remediating the gap",
+    "RESCORING": "Re-scoring coverage",
+    "ANALYZING_RESULTS": "Analyzing the failure",
+    "EXECUTING": "Running tests",
+    "REPORTING": "Finalizing the report",
+}
+
+
+def _render_busy_indicator(state: UIState, controller: RunController | None) -> None:
+    """Shown at the top of every page, only while a background worker is
+    actually running (state.worker_busy) -- never a guess at what's
+    happening, since controller.tool_stage is read fresh from the same
+    controller the worker thread is updating."""
+    if not state.worker_busy:
+        return
+    stage = controller.tool_stage if controller is not None else None
+    label = STAGE_LABEL.get(stage, stage or "working")
+    st.markdown(ui_components.busy_indicator(f"Agent working · {label}…"), unsafe_allow_html=True)
+
+
 _ACTION_ANCHOR_ID = "aae-action-anchor"
 
 _ACTION_VERB = {
@@ -1068,6 +1103,13 @@ def _render_confirm_decision(state: UIState, controller: RunController) -> None:
         disabled=choice is None or not can_confirm_decision(state, controller),
     ):
         confirm_decision(state, choice)
+        # polish-2 group A2: confirming the COMPLETION checkpoint is the
+        # run's last human decision -- jump straight to Results rather
+        # than leaving the human on Execution looking at a now-stale
+        # inline card. Only render_report (COMPLETION); Generate/Coverage/
+        # Failure confirmations stay on their own page.
+        if pending["tool_name"] == "render_report":
+            st.session_state["nav_id"] = "results"
         st.rerun()
 
 
@@ -1115,6 +1157,7 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
     there (or to Execution for approval/execute-ready) -- Overview is
     still a page a human might be looking at when something needs them."""
     _render_page_header("Overview")
+    _render_busy_indicator(state, data["controller"])
     _render_action_banner(data, "requirements")
 
     # "The use case" and "Business rules" each span the full content width,
@@ -1147,11 +1190,12 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Page "analysis" (Analysis) -- the ONLY place Decider escalations and
-# rule-match (grounding) checks are answered. Scenarios/Execution keep
-# read-only views and a "Go to Analysis" link (via _render_action_banner,
-# automatic once PENDING_SECTION_FOR_TOOL/pending_action's grounding
-# fallback point here).
+# Page "analysis" (Analysis) -- where Generate/Coverage Decider escalations
+# and rule-match (grounding) checks are answered (polish-2 group A: Failure/
+# Completion moved to Execution, inline below Approval/Execute -- see
+# _render_page_execution). Scenarios keeps a read-only view and a "Go to
+# Analysis"/"Go to Execution" link (via _render_action_banner, automatic
+# off PENDING_SECTION_FOR_TOOL/pending_action).
 # ---------------------------------------------------------------------------
 
 
@@ -1196,6 +1240,7 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
     header_col, button_col = st.columns([4, 1], vertical_alignment="center")
     with header_col:
         _render_page_header("Analysis")
+    _render_busy_indicator(state, controller)
     _render_action_banner(data, "analysis")
     with button_col:
         label = "New Analysis" if state.current_run_id is not None else "Start analysis"
@@ -1223,6 +1268,7 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
         controller is not None
         and controller.stage == "AWAITING_DECISION_CONFIRMATION"
         and controller.pending_decision is not None
+        and controller.pending_decision.get("tool_name") in _ANALYSIS_DECISION_TOOLS
     )
     latest_entry = versions_list[-1] if versions_list else None
     has_unresolved_rule_match = bool(latest_entry and latest_entry["unresolved_grounding"])
@@ -1348,6 +1394,7 @@ def _render_scenarios_table(scenarios: list[dict], grounding_items: dict, added_
 
 def _render_page_scenarios(state: UIState, data: dict) -> None:
     _render_page_header("Scenarios")
+    _render_busy_indicator(state, data["controller"])
     _render_action_banner(data, "scenarios")
     controller: RunController | None = data["controller"]
     versions_list = data.get("versions", [])
@@ -1478,6 +1525,7 @@ def _render_page_scenarios(state: UIState, data: dict) -> None:
 
 def _render_page_execution(state: UIState, data: dict) -> None:
     _render_page_header("Execution")
+    _render_busy_indicator(state, data["controller"])
     st.caption("Approve, then execute the five fixed tests.")
     _render_action_banner(data, "execution")
     controller: RunController | None = data["controller"]
@@ -1636,6 +1684,21 @@ def _render_page_execution(state: UIState, data: dict) -> None:
                     controller.record_approval("APPROVE", reviewer, latest_version, comment or None)
                 st.rerun()
 
+    # polish-2 group A1: Failure/Completion decisions answered here, inline
+    # below the Approval/Execute card -- not on Analysis (see
+    # PENDING_SECTION_FOR_TOOL/_EXECUTION_DECISION_TOOLS). Same
+    # _render_confirm_decision control as Analysis's Generate/Coverage
+    # decisions: identical safe radio pattern, nothing reimplemented.
+    has_execution_pending_decision = (
+        controller is not None
+        and controller.stage == "AWAITING_DECISION_CONFIRMATION"
+        and controller.pending_decision is not None
+        and controller.pending_decision.get("tool_name") in _EXECUTION_DECISION_TOOLS
+    )
+    if has_execution_pending_decision:
+        with col2, ui_components.widget_card_container("inline-decision-inbox"):
+            _render_confirm_decision(state, controller)
+
     results = data.get("results")
     run_col, log_col = st.columns(2)
     with run_col:
@@ -1675,6 +1738,7 @@ def _render_page_execution(state: UIState, data: dict) -> None:
 
 def _render_page_results(state: UIState, data: dict) -> None:
     _render_page_header("Results")
+    _render_busy_indicator(state, data["controller"])
     _render_action_banner(data, "results")
     controller: RunController | None = data["controller"]
     results = data.get("results")

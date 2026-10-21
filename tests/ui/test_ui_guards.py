@@ -893,14 +893,21 @@ def test_sidebar_pending_action_decision_points_at_analysis_for_generate_scenari
     assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "analysis"}
 
 
-def test_sidebar_pending_action_decision_points_at_analysis_for_every_checkpoint_tool(tmp_path):
-    # All four escalation tools -- generate_scenarios/save_scenario_set/
-    # finalize_analysis/render_report -- are answered only on Analysis
-    # (polish-1): Decider escalations and rule-match checks no longer
-    # scatter across Overview/Scenarios/Execution.
-    for tool_name in ("generate_scenarios", "save_scenario_set", "finalize_analysis", "render_report"):
+def test_sidebar_pending_action_decision_points_at_the_right_page_per_checkpoint_tool(tmp_path):
+    # polish-2 group A1: Generate/Coverage (generate_scenarios/
+    # save_scenario_set) are answered on Analysis; Failure/Completion
+    # (finalize_analysis/render_report) moved inline onto Execution,
+    # directly below the Approval/Execute card -- no longer all four on
+    # Analysis (that was polish-1's shape).
+    expected_section = {
+        "generate_scenarios": "analysis",
+        "save_scenario_set": "analysis",
+        "finalize_analysis": "execution",
+        "render_report": "execution",
+    }
+    for tool_name, section_id in expected_section.items():
         controller = _controller_with_pending_decision(tmp_path, tool_name)
-        assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "analysis"}
+        assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": section_id}
 
 
 def test_sidebar_pending_action_approval(tmp_path):
