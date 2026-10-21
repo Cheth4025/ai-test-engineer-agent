@@ -612,17 +612,24 @@ AAE_CSS = f"""
 .aae-kpi-value--failed {{ color: #B42318 !important; }}
 .aae-kpi-sub {{ font-size: 11.5px !important; color: #5B6878 !important; margin: 0 !important; }}
 
-/* -- Code / log blocks -- */
-.aae-code {{
-    background-color: #0F1B2D;
-    color: #D7E0EA;
-    border-radius: 7px;
-    padding: 12px 14px;
-    font-family: "Source Code Pro", monospace;
-    font-size: 11.5px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    overflow-x: auto;
+/* -- Code / log blocks -- raised specificity ([data-testid=
+   "stMarkdownContainer"] .aae-code ...) plus !important, same technique
+   and same reason as the table fix above: a bare, un-raised .aae-code
+   selector lost to Streamlit's own stMarkdownContainer/p rules (same
+   specificity, their stylesheet loads first but wins in practice),
+   rendering Gherkin/log/JSON as flattened paragraph text on a light
+   background instead of a dark monospace block (confirmed live). -- */
+.block-container [data-testid="stMarkdownContainer"] .aae-code {{
+    background-color: #0F1B2D !important;
+    color: #D7E0EA !important;
+    border-radius: 7px !important;
+    padding: 12px 14px !important;
+    font-family: "Source Code Pro", monospace !important;
+    font-size: 11.5px !important;
+    line-height: 1.6 !important;
+    white-space: pre-wrap !important;
+    overflow-x: auto !important;
+    display: block !important;
 }}
 .aae-log-pass {{ color: #86EFAC; }}
 .aae-log-fail {{ color: #FCA5A5; }}

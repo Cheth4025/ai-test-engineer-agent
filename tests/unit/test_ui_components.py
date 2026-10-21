@@ -471,6 +471,19 @@ def test_aae_css_table_rules_use_important_and_higher_specificity():
     assert "font-size: 12.5px !important;\n    line-height: 1.35 !important;" in uc.AAE_CSS
 
 
+def test_aae_css_code_block_rules_use_important_and_higher_specificity():
+    # polish-2 group E: live screenshots showed Gherkin/log/JSON rendering
+    # as flattened paragraph text on a light background despite correct-
+    # looking .aae-code source -- the same class of bug as the table fix
+    # above (confirmed: .aae-code was a bare, un-raised selector with no
+    # !important, so Streamlit's own stMarkdownContainer/p rules won the
+    # cascade). Same fix: raised specificity + !important.
+    assert '[data-testid="stMarkdownContainer"] .aae-code {' in uc.AAE_CSS
+    assert "background-color: #0F1B2D !important;" in uc.AAE_CSS
+    assert "white-space: pre-wrap !important;" in uc.AAE_CSS
+    assert 'font-family: "Source Code Pro", monospace !important;' in uc.AAE_CSS
+
+
 def test_aae_css_vertical_and_horizontal_card_gap_both_16px():
     assert '[data-testid="stVerticalBlock"] {\n    gap: 16px !important;' in uc.AAE_CSS
     assert '[data-testid="stHorizontalBlock"] {\n    gap: 16px !important;' in uc.AAE_CSS
