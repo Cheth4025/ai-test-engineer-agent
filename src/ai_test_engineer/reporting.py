@@ -76,7 +76,7 @@ def _decision_trace_md(decisions: list[dict] | None, decider_cfg: dict) -> str:
     rows = build_decision_trace(decisions or [], decider_cfg)
     if not rows:
         return "No decisions recorded."
-    header = "| Checkpoint | Decision | Confidence vs τ | Route | Source |\n|---|---|---|---|---|"
+    header = "| Checkpoint | Decision | Confidence vs τ | Outcome | Route | Source |\n|---|---|---|---|---|---|"
     lines = []
     for row in rows:
         confidence = row["confidence"] if row["confidence"] is not None else "—"
@@ -84,7 +84,7 @@ def _decision_trace_md(decisions: list[dict] | None, decider_cfg: dict) -> str:
         conf_text = f"{confidence} vs {threshold}" if row["confidence"] is not None else "—"
         lines.append(
             f"| {row['checkpoint']} | {row['icon']} {row['decision_text']} | {conf_text} | "
-            f"{row['route']} | {row['source']} |"
+            f"{row['outcome']} | {row['route']} | {row['source']} |"
         )
     return "\n".join([header, *lines])
 

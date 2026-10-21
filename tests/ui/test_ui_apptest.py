@@ -109,7 +109,9 @@ def _navigate(at: AppTest, nav_id: str) -> AppTest:
 # ---------------------------------------------------------------------------
 
 
-def test_app_loads_on_overview_with_nav_and_start_button(monkeypatch, tmp_path, ui_script_path):
+def test_app_loads_on_overview_with_nav_and_no_start_button(monkeypatch, tmp_path, ui_script_path):
+    """Overview is static reference content only (polish-1): Start Analysis
+    moved to the new Analysis nav item, which is now the 2nd of 5 pages."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
@@ -118,22 +120,35 @@ def test_app_loads_on_overview_with_nav_and_start_button(monkeypatch, tmp_path, 
     nav_labels = {b.key: b.label for b in at.sidebar.button if b.key and b.key.startswith("nav_")}
     assert nav_labels == {
         "nav_requirements": "Overview",
+        "nav_analysis": "Analysis",
         "nav_scenarios": "Scenarios",
         "nav_execution": "Execution",
         "nav_results": "Results",
     }
     assert at.title[0].value == "Overview"
     assert any("Payment Retry & Duplicate Charge Prevention" in c.value for c in at.caption)
+    assert not any(b.label == "Start analysis" for b in at.button)
+
+
+def test_analysis_page_has_the_start_button(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+
+    assert not at.exception
+    assert at.title[0].value == "Analysis"
     assert any(b.label == "Start analysis" for b in at.button)
 
 
-def test_sidebar_navigation_reaches_all_four_pages_with_right_titles(monkeypatch, tmp_path, ui_script_path):
+def test_sidebar_navigation_reaches_all_five_pages_with_right_titles(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     at = _app(ui_script_path)
     at.run()
 
     expected_titles = {
         "requirements": "Overview",
+        "analysis": "Analysis",
         "scenarios": "Scenarios",
         "execution": "Execution",
         "results": "Results",
@@ -157,7 +172,7 @@ def test_navigating_never_calls_orchestration_entry_points(monkeypatch, tmp_path
 
     at = _app(ui_script_path)
     at.run()
-    for nav_id in ("scenarios", "execution", "results", "requirements"):
+    for nav_id in ("analysis", "scenarios", "execution", "results", "requirements"):
         at = _navigate(at, nav_id)
         assert not at.exception
 
@@ -177,6 +192,26 @@ def test_plain_reload_never_calls_orchestration_entry_points(monkeypatch, tmp_pa
     assert not at.exception
 
 
+def test_static_css_is_present_on_every_run_not_only_the_first(monkeypatch, tmp_path, ui_script_path):
+    """Point A.1 of the polish-1 spec ("Inject ONE CSS block once per
+    run") means one st.markdown call per run, not "only the first run
+    ever": Streamlit drops any element a run doesn't re-emit, so CSS
+    injected only once would vanish from the DOM the moment anything else
+    reruns the script (a nav click, the 2s fragment tick, a reload) --
+    confirmed live on PR #6 (no styling after the first paint). AAE_CSS
+    must be emitted on every run, including a rerun triggered by a click."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+
+    style_blocks = [m.value for m in at.markdown if "aae-card-heading" in m.value and "<style>" in m.value]
+    assert len(style_blocks) == 1
+
+    at = _navigate(at, "analysis")  # a rerun via a real click, not a bare at.run()
+    style_blocks_after = [m.value for m in at.markdown if "aae-card-heading" in m.value and "<style>" in m.value]
+    assert len(style_blocks_after) == 1
+
+
 # ---------------------------------------------------------------------------
 # Overview page content
 # ---------------------------------------------------------------------------
@@ -189,15 +224,27 @@ def test_overview_shows_use_case_copy_and_real_br_table(monkeypatch, tmp_path, u
 
     assert not at.exception
     markdown_text = " ".join(m.value for m in at.markdown)
-    # \$ (escaped) -- a bare "$100" is parsed as inline LaTeX math by
-    # st.markdown (caught visually; see ui.py's _USE_CASE_PROBLEM comment).
-    assert "A customer pays \\$100 once" in markdown_text  # PROBLEM copy
+    # The use-case card is now rendered as one aae-card HTML block (plan
+    # section C "use st.table/.../st.info for styled sections" is replaced
+    # by ui_components.card()/labeled_section()) -- content lives inside
+    # at.markdown, not a separate widget type.
+    assert "aae-label-problem" in markdown_text
+    assert "aae-label-impact" in markdown_text
+    assert "aae-label-mitigation" in markdown_text
+    # No backslash-escaping here: this text goes into an HTML block via
+    # labeled_section()/ui_components.escape(), not plain st.markdown, so
+    # there's no LaTeX-math parsing to guard against -- a baked-in "\$"
+    # would show up as a literal backslash in the rendered card instead.
+    assert "A customer pays $100 once" in markdown_text  # PROBLEM copy
+    assert "\\$100" not in markdown_text
+    assert "\\$200" not in markdown_text
     assert "Inflated revenue" in markdown_text  # IMPACT copy
     assert "Test T04 catches the duplicate" in markdown_text  # MITIGATION copy
 
-    br_table = next(t.value for t in at.table if "ID" in list(t.value.columns))
-    assert list(br_table["ID"]) == ["BR01", "BR02", "BR03", "BR04", "BR05", "BR06"]
-    assert br_table[br_table["ID"] == "BR01"]["Rule"].iloc[0] == "Idempotency key"
+    assert "aae-table" in markdown_text
+    assert "BR01" in markdown_text and "BR06" in markdown_text
+    assert "Idempotency key" in markdown_text
+    assert "Loaded from the requirements catalog" in markdown_text
 
 
 def test_overview_shows_acceptance_criteria_and_agent_steps(monkeypatch, tmp_path, ui_script_path):
@@ -219,7 +266,9 @@ def test_approval_and_results_placeholders_before_any_run(monkeypatch, tmp_path,
     assert any("Start analysis to generate scenarios." in i.value for i in at.info)
 
     at = _navigate(at, "execution")
-    assert any("Results appear here after execution." in i.value for i in at.info)
+    # Now inside the Test run card's HTML body (ui_components.card()), not
+    # a native st.info.
+    assert any("Results appear here after execution." in m.value for m in at.markdown)
 
     at = _navigate(at, "results")
     assert any("Results appear after the tests run." in i.value for i in at.info)
@@ -297,12 +346,13 @@ def test_sidebar_shows_notice_pointing_to_page_with_pending_decision(monkeypatch
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _settle(at, lambda a: any("Scenarios" in w.value for w in a.sidebar.warning))
+    at = _settle(at, lambda a: any("Analysis" in w.value for w in a.sidebar.warning))
 
     assert not at.exception
     assert any(
-        w.value == "A decision needs your confirmation — see 'Scenarios'." for w in at.sidebar.warning
+        w.value == "A decision needs your confirmation — see 'Analysis'." for w in at.sidebar.warning
     )
 
 
@@ -336,27 +386,39 @@ def test_no_action_banner_anywhere_before_any_run(monkeypatch, tmp_path, ui_scri
 
     for nav_id in ("requirements", "scenarios", "execution", "results"):
         at = _navigate(at, nav_id)
-        assert not any("Action needed" in w.value for w in at.warning)
+        assert not any("Action needed" in m.value for m in at.markdown)
 
 
 def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeypatch, tmp_path, ui_script_path):
+    """The action banner is now an aae-banner HTML block (ui_components.
+    banner()), not a native st.warning -- the same-page link is a real
+    <a href="#aae-action-anchor"> anchor embedded in the banner; the
+    cross-page case is the banner plus a real st.button beside it. A
+    pending decision is answered only on Analysis (polish-1): Scenarios
+    now gets the cross-page "Go to Analysis" case too, same as Overview."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
     monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("Action needed below" in w.value for w in a.warning))
+    at = _settle(at, lambda a: any("Action needed below" in m.value for m in a.markdown))
 
-    assert any("confirm the Decider decision" in w.value and "Jump to it" in w.value for w in at.warning)
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "confirm the Decider decision" in markdown_text
+    assert '<a href="#aae-action-anchor">Jump to it</a>' in markdown_text
+
+    at = _navigate(at, "scenarios")
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Action needed" in markdown_text and "see 'Analysis'" in markdown_text
+    assert any(b.label == "Go to Analysis" for b in at.button)
 
     at = _navigate(at, "requirements")
-    assert any(
-        "Action needed" in w.value and "see 'Scenarios'" in w.value for w in at.warning
-    )
-    assert any(b.label == "Go to Scenarios" for b in at.button)
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Action needed" in markdown_text and "see 'Analysis'" in markdown_text
+    assert any(b.label == "Go to Analysis" for b in at.button)
 
 
 def test_action_banner_on_overview_for_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
@@ -367,17 +429,63 @@ def test_action_banner_on_overview_for_awaiting_approval(monkeypatch, tmp_path, 
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "requirements")
-    at = _settle(at, lambda a: any("Action needed" in w.value for w in a.warning))
+    at = _settle(at, lambda a: any("Action needed" in m.value for m in a.markdown))
 
-    assert any(
-        "record the approval decision" in w.value and "see 'Execution'" in w.value for w in at.warning
-    )
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "record the approval decision" in markdown_text and "see 'Execution'" in markdown_text
     assert any(b.label == "Go to Execution" for b in at.button)
 
     at = _navigate(at, "execution")
-    assert any(
-        "Action needed below" in w.value and "record the approval decision" in w.value for w in at.warning
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Action needed below" in markdown_text and "record the approval decision" in markdown_text
+
+
+def test_rule_match_buttons_disabled_while_a_worker_is_busy(monkeypatch, tmp_path, ui_script_path):
+    """Every other mutating control (Start Analysis, Confirm decision,
+    Approve, Reject, Execute) disables itself while state.worker_busy is
+    True, so a human can't fire a second write while a background worker
+    is already writing this run's files. The Matches/No match buttons
+    must do the same -- resolve_grounding() writes grounding_v{N}.json,
+    which can race a concurrent REMEDIATE_GAP/RESCORING cycle writing the
+    same file for the same run."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+    controller.save_evidence(
+        "grounding_v1.json",
+        {
+            "scenario_set_version": 1,
+            "items": [{"scenario_id": "S01", "verdict": "NEEDS_REVIEW", "confidence": 0.5, "human_resolution": None}],
+        },
     )
+
+    release = threading.Event()
+
+    def slow_resume(run_id: str, choice: str) -> dict:
+        release.wait(timeout=2)
+        return {"run_id": run_id, "workflow_state": "AWAITING_APPROVAL", "stage": "AWAITING_APPROVAL"}
+
+    monkeypatch.setattr(orchestration, "resume_pending_decision", slow_resume)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Matches"))
+
+    assert all(b.disabled is False for b in at.button if b.label == "Matches")
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("ACCEPT_COVERAGE").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()  # worker_busy=True now
+
+    assert any(b.label == "Matches" for b in at.button)
+    assert all(b.disabled is True for b in at.button if b.label == "Matches")
+    assert all(b.disabled is True for b in at.button if b.label == "No match")
+
+    release.set()
+    time.sleep(0.1)
+    at.run()
 
 
 def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
@@ -414,8 +522,8 @@ def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_c
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     radio = next(r for r in at.radio if r.label == "Your choice")
@@ -453,8 +561,8 @@ def test_confirm_decision_choice_survives_fragment_reruns_and_submits_exactly_th
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     # The default verdicts' suggestion is REMEDIATE_GAP -- deliberately pick
@@ -488,8 +596,8 @@ def test_second_escalation_in_same_run_gets_a_fresh_unanswered_radio(monkeypatch
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _navigate(at, "scenarios")
     at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
 
     next(r for r in at.radio if r.label == "Your choice").set_value("REMEDIATE_GAP").run()
@@ -535,6 +643,7 @@ def test_duplicate_start_analysis_click_while_busy_does_not_start_second_run(mon
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     second_start_button = next(b for b in at.button if b.label == "Start analysis")
     assert second_start_button.disabled is True  # disabled buttons can't be re-clicked
@@ -557,6 +666,7 @@ def test_new_analysis_disabled_while_awaiting_decision_confirmation(monkeypatch,
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _settle(at, lambda a: _has_label(a, "button", "New Analysis"))
 
@@ -576,6 +686,7 @@ def test_submit_clarification_disabled_when_awaiting_clarification(monkeypatch, 
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _settle(at, lambda a: _has_label(a, "button", "Submit clarification"))
 
@@ -703,11 +814,15 @@ def _register_remediated_run(tmp_path, confidence: float = 0.62) -> RunControlle
 
 
 def _start_into_fixture(at: AppTest, monkeypatch, controller: RunController) -> AppTest:
+    """Start analysis lives only on the Analysis page (polish-1) -- navigate
+    there first so every caller can click it regardless of which page the
+    AppTest instance currently has selected."""
     monkeypatch.setattr(
         orchestration,
         "run_initial_pass",
         lambda: {"run_id": controller.run_id, "workflow_state": "AWAITING_APPROVAL", "stage": "AWAITING_APPROVAL"},
     )
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     return at
 
@@ -720,12 +835,18 @@ def test_scenarios_page_shows_v2_with_s04_added_by_remediation_badge(monkeypatch
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("Scenario" in getattr(t.value, "columns", []) for t in a.table))
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
 
     assert not at.exception
-    scenarios_table = next(t.value for t in at.table if "Scenario" in getattr(t.value, "columns", []))
-    s04_row = scenarios_table[scenarios_table["ID"] == "S04"]
-    assert "Added by remediation" in s04_row["Scenario"].iloc[0]
+    # The scenario table is now one aae-table HTML block (ui_components.
+    # table()); S04's "Added by remediation" badge is its own Rule-match
+    # pill (not appended to the Scenario title text) and its row carries
+    # the aae-row--added highlight class.
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "S04" in markdown_text
+    assert "Duplicate successful callback" in markdown_text
+    assert 'aae-pill--added-remediation">Added by remediation</span>' in markdown_text
+    assert "aae-row--added" in markdown_text
     # v1 (the default-latest segmented_control value is v2, but v1's own
     # table must never show the badge for S04 -- it's not on this page's
     # default render) is covered by the diff-based helper's own unit tests;
@@ -737,7 +858,8 @@ def test_scenarios_page_shows_coverage_donuts_before_and_after(monkeypatch, tmp_
     empty via at.get("altair_chart")), so this checks the real caption each
     donut renders right after itself instead -- proves both actually
     rendered with the correct before/after coverage, not just that no
-    exception occurred."""
+    exception occurred. The caption is now an aae-caption HTML block
+    (ui_components.small_caption()) in at.markdown, not a native st.caption."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_remediated_run(tmp_path)
 
@@ -745,12 +867,12 @@ def test_scenarios_page_shows_coverage_donuts_before_and_after(monkeypatch, tmp_
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("Before" in c.value for c in a.caption))
+    at = _settle(at, lambda a: any("Before" in m.value for m in a.markdown))
 
     assert not at.exception
-    captions = [c.value for c in at.caption]
-    assert any("Before · coverage_v1 · 4 of 5" in c for c in captions)
-    assert any("After · coverage_v2 · 5 of 5" in c for c in captions)
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Before · coverage_v1 · 4 of 5" in markdown_text
+    assert "After · coverage_v2 · 5 of 5" in markdown_text
 
 
 def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypatch, tmp_path, ui_script_path):
@@ -788,6 +910,65 @@ def test_scenarios_page_gherkin_tabs_one_per_scenario(monkeypatch, tmp_path, ui_
 # ---------------------------------------------------------------------------
 
 
+def _register_run_with_unresolved_rule_match_blocker(tmp_path) -> RunController:
+    """AWAITING_APPROVAL with coverage 5/5 (not the blocker under test) but
+    one grounding item still NEEDS_REVIEW/unresolved -- isolates the
+    approval_blockers() "grounding flag not resolved" wording specifically."""
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "scenarios_v1.json").write_text(
+        json.dumps({"version": 1, "scenarios": [{"scenario_id": "S03", "title": "x", "rule_ids": ["BR03"]}]})
+    )
+    (run_dir / "coverage_v1.json").write_text(
+        json.dumps({"covered": 5, "required": 5, "percentage": 100.0, "rows": [], "rule_traceability": {}})
+    )
+    (run_dir / "grounding_v1.json").write_text(
+        json.dumps(
+            {
+                "scenario_set_version": 1,
+                "items": [{"scenario_id": "S03", "verdict": "NEEDS_REVIEW", "confidence": 0.5, "human_resolution": None}],
+            }
+        )
+    )
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def test_execution_blocker_text_says_rule_match_check_not_grounding_flag(monkeypatch, tmp_path, ui_script_path):
+    """Presentation-only wording (plan C6-8): approval_blockers()'s real
+    internal string still says "grounding flag" (state.py, unchanged) --
+    the UI translates it to "rule-match check" at the render boundary."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_with_unresolved_rule_match_blocker(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("S03" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "rule-match check not resolved" in markdown_text
+    assert "grounding flag" not in markdown_text
+
+
+def test_execution_ready_banner_says_rule_match_checks_not_grounding_flags(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)  # no blockers -- the "Ready for approval" banner
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("Ready for approval" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "rule-match checks" in markdown_text
+    assert "grounding flags" not in markdown_text
+
+
 def test_execution_inputs_locked_when_not_awaiting_approval(monkeypatch, tmp_path, ui_script_path):
     """Reviewer name/Comment must be locked the same way the buttons
     already are -- previously only the buttons checked workflow_state ==
@@ -808,7 +989,9 @@ def test_execution_inputs_locked_when_not_awaiting_approval(monkeypatch, tmp_pat
     comment_input = next(t for t in at.text_input if t.label == "Comment (optional)")
     assert reviewer_input.disabled is True
     assert comment_input.disabled is True
-    assert any("Locked until the run reaches AWAITING_APPROVAL" in w.value for w in at.warning)
+    # The blocker banner is now an aae-banner HTML block (ui_components.
+    # banner()), not a native st.warning.
+    assert any("Locked until the run reaches AWAITING_APPROVAL" in m.value for m in at.markdown)
 
 
 def test_execution_approve_requires_reviewer_name(monkeypatch, tmp_path, ui_script_path):
@@ -873,7 +1056,9 @@ def test_execution_execute_unlocks_after_approval(monkeypatch, tmp_path, ui_scri
     next(b for b in at.button if b.label == "Approve").click().run()
 
     assert next(b for b in at.button if b.label == "Execute").disabled is False
-    assert any("Ready to run the five fixed tests." in c.value for c in at.caption)
+    # The reason caption is now an aae-caption HTML block (ui_components.
+    # small_caption()), not a native st.caption.
+    assert any("Ready to run the five fixed tests." in m.value for m in at.markdown)
 
 
 def test_execution_shows_fixed_manifest_with_real_expected_assertions(monkeypatch, tmp_path, ui_script_path):
@@ -884,15 +1069,14 @@ def test_execution_shows_fixed_manifest_with_real_expected_assertions(monkeypatc
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "execution")
-    at = _settle(at, lambda a: any("ID" in getattr(t.value, "columns", []) for t in a.table))
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
 
-    manifest_table = next(t.value for t in at.table if "Expected" in getattr(t.value, "columns", []))
-    assert list(manifest_table["ID"]) == ["T01", "T02", "T03", "T04", "T05"]
-    t04_row = manifest_table[manifest_table["ID"] == "T04"]
-    assert t04_row["Expected"].iloc[0] == "shared checks only"
-    t03_row = manifest_table[manifest_table["ID"] == "T03"]
-    assert "conflict_rejected" in t03_row["Expected"].iloc[0]
-    assert any("ledger_success_count == 1" in c.value for c in at.caption)
+    # The manifest is now one aae-table HTML block (ui_components.table()).
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "T01" in markdown_text and "T05" in markdown_text
+    assert "shared checks only" in markdown_text  # T04's Expected cell
+    assert "conflict_rejected" in markdown_text  # T03's Expected cell
+    assert "ledger_success_count == 1" in markdown_text
 
 
 # ---------------------------------------------------------------------------
@@ -1040,6 +1224,26 @@ def test_execute_button_unlocks_when_approved(monkeypatch, tmp_path, ui_script_p
     assert any("Ready to execute" in w.value for w in at.sidebar.warning)
 
 
+def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_path, ui_script_path):
+    """Plan C6-8's execution summary format: "5/5 run · 4 passed · 1
+    failed · 1.0s" -- was "{passed}/{total} completed · {duration}s"."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "5/5 run · 4 passed · 1 failed · 0.4s" in markdown_text
+
+
 def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_script_path):
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_completed_run(tmp_path)
@@ -1049,23 +1253,33 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
-    at = _settle(at, lambda a: any("Agent workflow" in w.value for w in list(a.success) + list(a.error)))
+    at = _settle(at, lambda a: any("Agent workflow" in m.value for m in a.markdown))
 
     assert not at.exception
-    banner_texts = " ".join(w.value for w in list(at.success) + list(at.error))
-    assert "Agent workflow: COMPLETED" in banner_texts
-    assert "Payment verification: FAILED" in banner_texts
-
-    results_table = next(t.value for t in at.table if "Actual" in getattr(t.value, "columns", []))
-    assert list(results_table["ID"]) == ["T01", "T02", "T03", "T04", "T05"]
-    t04_row = results_table[results_table["ID"] == "T04"]
-    assert t04_row["Expected"].iloc[0] == "1 ledger entry"
-    assert t04_row["Actual"].iloc[0] == "2 ledger entries"
-    assert t04_row["Status"].iloc[0] == "FAIL"
-
+    # Verdict banners and the Test results table are now ui_components.
+    # verdict()/table() HTML (point A.6: no st.success/st.error/st.table
+    # for these styled sections), not native success/error/table elements.
     markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Agent workflow: COMPLETED" in markdown_text
+    assert "aae-banner--workflow-ok" in markdown_text
+    assert "Payment verification: FAILED" in markdown_text
+    assert "aae-banner--verification-fail" in markdown_text
+
+    # KPI tiles (ui_components.kpi_row()) -- never previously tested.
+    assert "aae-kpi-row" in markdown_text
+    assert "Total tests" in markdown_text and ">5<" in markdown_text
+    assert "aae-kpi-value--passed" in markdown_text
+    assert "aae-kpi-value--failed" in markdown_text
+
+    assert "T01" in markdown_text and "T05" in markdown_text
+    assert "1 ledger entry" in markdown_text  # T04 Expected
+    assert "2 ledger entries" in markdown_text  # T04 Actual
+    assert 'aae-pill--fail">FAIL</span>' in markdown_text
+    assert "aae-row--fail" in markdown_text
+
     assert "Observed 2 ledger entries instead of 1 ledger entry." in markdown_text
     assert "BR06: Re-delivery" in markdown_text
     assert "Developer fix. The agent reports defects; it does not change code." in markdown_text
@@ -1081,6 +1295,7 @@ def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
@@ -1108,6 +1323,7 @@ def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypa
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
@@ -1137,6 +1353,7 @@ def test_results_page_evidence_tabs_and_downloads(monkeypatch, tmp_path, ui_scri
 
     at = _app(ui_script_path)
     at.run()
+    at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
     at = _settle(at, lambda a: len(a.tabs) >= 3)

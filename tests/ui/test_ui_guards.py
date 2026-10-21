@@ -883,14 +883,24 @@ def test_sidebar_pending_action_none_when_no_controller():
     assert ui.sidebar_pending_action(None) is None
 
 
-def test_sidebar_pending_action_decision_points_at_scenarios(tmp_path):
+def test_sidebar_pending_action_decision_points_at_analysis_for_save_scenario_set(tmp_path):
     controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
-    assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "scenarios"}
+    assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "analysis"}
 
 
-def test_sidebar_pending_action_decision_points_at_requirements(tmp_path):
+def test_sidebar_pending_action_decision_points_at_analysis_for_generate_scenarios(tmp_path):
     controller = _controller_with_pending_decision(tmp_path, "generate_scenarios")
-    assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "requirements"}
+    assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "analysis"}
+
+
+def test_sidebar_pending_action_decision_points_at_analysis_for_every_checkpoint_tool(tmp_path):
+    # All four escalation tools -- generate_scenarios/save_scenario_set/
+    # finalize_analysis/render_report -- are answered only on Analysis
+    # (polish-1): Decider escalations and rule-match checks no longer
+    # scatter across Overview/Scenarios/Execution.
+    for tool_name in ("generate_scenarios", "save_scenario_set", "finalize_analysis", "render_report"):
+        controller = _controller_with_pending_decision(tmp_path, tool_name)
+        assert ui.sidebar_pending_action(controller) == {"kind": "decision", "section_id": "analysis"}
 
 
 def test_sidebar_pending_action_approval(tmp_path):
@@ -907,7 +917,7 @@ def test_sidebar_pending_action_none_when_nothing_pending(tmp_path):
 def test_pending_action_falls_back_to_grounding_when_latest_version_has_unresolved_flags(tmp_path):
     controller = RunController("r1", tmp_path)  # PREPARING, no pending decision
     versions = [{"version": 1, "unresolved_grounding": ["S03"]}]
-    assert ui.pending_action(controller, versions) == {"kind": "grounding", "section_id": "scenarios"}
+    assert ui.pending_action(controller, versions) == {"kind": "grounding", "section_id": "analysis"}
 
 
 def test_pending_action_ignores_grounding_on_an_older_version(tmp_path):
@@ -919,13 +929,272 @@ def test_pending_action_ignores_grounding_on_an_older_version(tmp_path):
 def test_pending_action_decision_beats_grounding(tmp_path):
     controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
     versions = [{"version": 1, "unresolved_grounding": ["S03"]}]
-    assert ui.pending_action(controller, versions) == {"kind": "decision", "section_id": "scenarios"}
+    assert ui.pending_action(controller, versions) == {"kind": "decision", "section_id": "analysis"}
 
 
 def test_pending_action_none_when_nothing_pending(tmp_path):
     controller = RunController("r1", tmp_path)
     assert ui.pending_action(controller, []) is None
     assert ui.pending_action(None, []) is None
+
+
+# ---------------------------------------------------------------------------
+# pending_action_count -- the Analysis nav badge count: a pending Decider
+# escalation (1) plus every unresolved rule-match item on the latest
+# scenario version. Matches the mock's "1 Decider decision and 4 rule-match
+# checks" wording.
+# ---------------------------------------------------------------------------
+
+
+def test_pending_action_count_zero_when_nothing_pending(tmp_path):
+    controller = RunController("r1", tmp_path)
+    assert ui.pending_action_count(controller, []) == 0
+    assert ui.pending_action_count(None, []) == 0
+
+
+def test_pending_action_count_one_for_pending_escalation_alone(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    assert ui.pending_action_count(controller, []) == 1
+
+
+def test_pending_action_count_counts_unresolved_rule_match_items(tmp_path):
+    controller = RunController("r1", tmp_path)
+    versions = [{"version": 1, "unresolved_grounding": ["S01", "S02", "S03", "S04"]}]
+    assert ui.pending_action_count(controller, versions) == 4
+
+
+def test_pending_action_count_sums_escalation_and_rule_match(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    versions = [{"version": 1, "unresolved_grounding": ["S01", "S02", "S03", "S04"]}]
+    assert ui.pending_action_count(controller, versions) == 5
+
+
+def test_pending_action_count_ignores_grounding_on_an_older_version(tmp_path):
+    controller = RunController("r1", tmp_path)
+    versions = [{"version": 1, "unresolved_grounding": ["S03"]}, {"version": 2, "unresolved_grounding": []}]
+    assert ui.pending_action_count(controller, versions) == 0
+
+
+def test_pending_action_count_defaults_versions_to_empty():
+    assert ui.pending_action_count(None) == 0
+
+
+# ---------------------------------------------------------------------------
+# execution_pending_count -- the Execution nav badge: 1 when approval or
+# execute-ready is the pending action, else 0. Never counts an escalation
+# or rule-match item (those badge Analysis instead).
+# ---------------------------------------------------------------------------
+
+
+def test_execution_pending_count_zero_when_nothing_pending(tmp_path):
+    controller = RunController("r1", tmp_path)
+    assert ui.execution_pending_count(controller) == 0
+
+
+def test_execution_pending_count_one_when_awaiting_approval(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    assert ui.execution_pending_count(controller) == 1
+
+
+def test_execution_pending_count_one_when_execute_ready(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("APPROVED", stage="APPROVED", busy=False)
+    assert ui.execution_pending_count(controller) == 1
+
+
+def test_execution_pending_count_zero_when_decision_pending_instead(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    assert ui.execution_pending_count(controller) == 0
+
+
+def test_execution_pending_count_zero_for_none_controller():
+    assert ui.execution_pending_count(None) == 0
+
+
+# ---------------------------------------------------------------------------
+# progress_steps_for -- the Analysis page's 7-step tracker (Interpret/
+# Generate/Coverage/Decide/Approve/Execute/Report). Pure function over
+# controller.stage/workflow_state/pending_decision, same style as
+# can_execute etc.
+# ---------------------------------------------------------------------------
+
+_PROGRESS_LABELS = ["Interpret", "Generate", "Coverage", "Decide", "Approve", "Execute", "Report"]
+
+
+def _states(steps: list[dict]) -> list[str]:
+    assert [s["label"] for s in steps] == _PROGRESS_LABELS
+    return [s["state"] for s in steps]
+
+
+def _controller_at(tmp_path, workflow_state: str, stage: str, *, pending_tool: str | None = None) -> RunController:
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state(workflow_state, stage=stage, busy=False)
+    if pending_tool is not None:
+        controller.set_pending_decision({"tool_name": pending_tool, "context": {}, "verdicts": {}})
+    return controller
+
+
+def test_progress_steps_for_none_controller_all_future():
+    steps = ui.progress_steps_for(None)
+    assert _states(steps) == ["future"] * 7
+
+
+def test_progress_steps_for_interpreting(tmp_path):
+    controller = _controller_at(tmp_path, "PREPARING", "INTERPRETING")
+    assert _states(ui.progress_steps_for(controller)) == ["current"] + ["future"] * 6
+
+
+def test_progress_steps_for_generating(tmp_path):
+    controller = _controller_at(tmp_path, "PREPARING", "GENERATING")
+    assert _states(ui.progress_steps_for(controller)) == ["done", "current"] + ["future"] * 5
+
+
+def test_progress_steps_for_scoring(tmp_path):
+    controller = _controller_at(tmp_path, "PREPARING", "SCORING")
+    assert _states(ui.progress_steps_for(controller)) == ["done", "done", "current"] + ["future"] * 4
+
+
+def test_progress_steps_for_remediating_and_rescoring_both_map_to_coverage(tmp_path):
+    for stage in ("REMEDIATING", "RESCORING"):
+        controller = _controller_at(tmp_path, "PREPARING", stage)
+        assert _states(ui.progress_steps_for(controller)) == ["done", "done", "current"] + ["future"] * 4
+
+
+def test_progress_steps_for_pending_generate_scenarios_decision(tmp_path):
+    controller = _controller_at(
+        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="generate_scenarios"
+    )
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done", "done", "future", "current", "future", "future", "future"]
+    assert steps[3]["sub"] == "waiting for you"
+
+
+def test_progress_steps_for_pending_save_scenario_set_decision_matches_the_mock(tmp_path):
+    """The 05_analysis.png mock's concrete example: Interpret/Generate done,
+    Coverage done (4/5, gap found), Decide current with 'waiting for you'."""
+    controller = _controller_at(
+        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="save_scenario_set"
+    )
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done", "done", "done", "current", "future", "future", "future"]
+    assert steps[3]["sub"] == "waiting for you"
+
+
+def test_progress_steps_for_pending_finalize_analysis_decision_shows_report_current(tmp_path):
+    controller = _controller_at(
+        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="finalize_analysis"
+    )
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done", "done", "done", "done", "done", "done", "current"]
+    assert steps[6]["sub"] == "waiting for you"
+
+
+def test_progress_steps_for_pending_render_report_decision_shows_report_current(tmp_path):
+    controller = _controller_at(
+        tmp_path, "PREPARING", "AWAITING_DECISION_CONFIRMATION", pending_tool="render_report"
+    )
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done", "done", "done", "done", "done", "done", "current"]
+
+
+def test_progress_steps_for_awaiting_clarification(tmp_path):
+    controller = _controller_at(tmp_path, "AWAITING_CLARIFICATION", "AWAITING_CLARIFICATION")
+    steps = ui.progress_steps_for(controller)
+    assert _states(steps) == ["done", "current", "future", "future", "future", "future", "future"]
+    assert steps[1]["sub"] == "waiting for you"
+
+
+def test_progress_steps_for_awaiting_approval(tmp_path):
+    controller = _controller_at(tmp_path, "AWAITING_APPROVAL", "AWAITING_APPROVAL")
+    assert _states(ui.progress_steps_for(controller)) == ["done", "done", "done", "done", "current", "future", "future"]
+
+
+def test_progress_steps_for_approved_not_yet_executed(tmp_path):
+    controller = _controller_at(tmp_path, "APPROVED", "APPROVED")
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 5 + ["current", "future"]
+
+
+def test_progress_steps_for_executing(tmp_path):
+    controller = _controller_at(tmp_path, "EXECUTING", "EXECUTING")
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 5 + ["current", "future"]
+
+
+def test_progress_steps_for_analyzing_results(tmp_path):
+    controller = _controller_at(tmp_path, "ANALYZING_RESULTS", "ANALYZING_RESULTS")
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 6 + ["current"]
+
+
+def test_progress_steps_for_reporting(tmp_path):
+    controller = _controller_at(tmp_path, "REPORTING", "REPORTING")
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 6 + ["current"]
+
+
+def test_progress_steps_for_completed_all_done(tmp_path):
+    controller = _controller_at(tmp_path, "COMPLETED", "COMPLETED")
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 7
+
+
+def test_progress_steps_for_rejected_stops_after_approve(tmp_path):
+    controller = _controller_at(tmp_path, "REJECTED", "REJECTED")
+    assert _states(ui.progress_steps_for(controller)) == ["done"] * 5 + ["future", "future"]
+
+
+def test_progress_steps_for_blocked_position_unknown(tmp_path):
+    controller = _controller_at(tmp_path, "BLOCKED", "BLOCKED")
+    assert _states(ui.progress_steps_for(controller)) == ["future"] * 7
+
+
+def test_progress_steps_for_stopped_position_unknown(tmp_path):
+    controller = _controller_at(tmp_path, "STOPPED", "STOPPED")
+    assert _states(ui.progress_steps_for(controller)) == ["future"] * 7
+
+
+# ---------------------------------------------------------------------------
+# Nav badges: _nav_badge_counts (per-item counts) and _nav_badge_css (the
+# injected amber-pill overlay, point 2 of the user's approved changes).
+# ---------------------------------------------------------------------------
+
+
+def test_nav_badge_counts_zero_for_every_item_when_nothing_pending(tmp_path):
+    controller = RunController("r1", tmp_path)
+    counts = ui._nav_badge_counts(controller, [])
+    assert counts.get("analysis", 0) == 0
+    assert counts.get("execution", 0) == 0
+
+
+def test_nav_badge_counts_analysis_only_for_pending_decision(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    counts = ui._nav_badge_counts(controller, [])
+    assert counts["analysis"] == 1
+    assert counts.get("execution", 0) == 0
+
+
+def test_nav_badge_counts_execution_only_for_awaiting_approval(tmp_path):
+    controller = RunController("r1", tmp_path)
+    controller.set_workflow_state("AWAITING_APPROVAL", stage="AWAITING_APPROVAL", busy=False)
+    counts = ui._nav_badge_counts(controller, [])
+    assert counts.get("analysis", 0) == 0
+    assert counts["execution"] == 1
+
+
+def test_nav_badge_counts_analysis_sums_decision_and_rule_match(tmp_path):
+    controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
+    versions = [{"version": 1, "unresolved_grounding": ["S01", "S02", "S03", "S04"]}]
+    counts = ui._nav_badge_counts(controller, versions)
+    assert counts["analysis"] == 5  # matches the mock's "1 Decider decision and 4 rule-match checks"
+
+
+def test_nav_badge_css_embeds_nav_id_and_count():
+    css = ui._nav_badge_css("analysis", 5)
+    assert ".st-key-nav_analysis button::after" in css
+    assert 'content: "5";' in css
+    assert "#F59E0B" in css
+
+
+def test_nav_badge_css_rejects_non_int_count():
+    with pytest.raises(AssertionError):
+        ui._nav_badge_css("analysis", "5")
 
 
 # ---------------------------------------------------------------------------
@@ -937,9 +1206,10 @@ def test_app_title_is_assurance_agent_experience():
     assert ui.APP_TITLE == "Assurance Agent Experience"
 
 
-def test_base_css_carries_the_new_title_and_not_the_old_one():
-    assert ui.APP_TITLE in ui._BASE_CSS
-    assert "AI Test Engineer Agent" not in ui._BASE_CSS
+def test_title_css_carries_the_new_title_and_not_the_old_one():
+    title_css = ui._title_css(ui.APP_TITLE)
+    assert ui.APP_TITLE in title_css
+    assert "AI Test Engineer Agent" not in title_css
 
 
 def test_page_config_kwargs_use_the_new_title():

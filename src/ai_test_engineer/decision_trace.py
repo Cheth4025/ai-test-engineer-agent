@@ -101,6 +101,42 @@ def decider_decision_value(record: dict) -> str:
     return "Awaiting human"
 
 
+OUTCOME_AUTO = "Auto"
+OUTCOME_HUMAN_CONFIRMED = "Human confirmed"
+OUTCOME_HUMAN_OVERRIDE = "Human override"
+OUTCOME_WAITING = "⏳ Waiting"
+# A fixed literal, not a dynamic f-string: the real rejection reason lives
+# only in decision_text (decider_decision_value's own "Rejected by guard:
+# <reason>" string), never duplicated into outcome -- outcome stays a
+# small, stable, pill-ready vocabulary a renderer can match by exact
+# lookup, with no prefix-matching glue needed for a value that could
+# otherwise carry arbitrary runtime text. "not reached" is produced only
+# by pad_not_reached_rows, never by _outcome_for itself.
+OUTCOME_REJECTED_BY_GUARD = "Rejected by guard"
+
+
+def _outcome_for(base_record: dict, human_record: dict | None, override: bool, *, still_waiting: bool) -> str:
+    """The short pill-ready outcome literal for one row -- a separate,
+    stable vocabulary from decision_text (which stays free-form prose: the
+    override suffix, the "(human)" marker, the escalated-by-other-question
+    suffix, the real rejection reason).
+
+    still_waiting is computed by the caller (_emit), which already knows
+    structurally whether this row is the genuinely-still-paused case --
+    re-deriving it here via a string match against decider_decision_value's
+    "Awaiting human" prose would couple this stable enum to wording that's
+    free to change independently."""
+    if base_record.get("decision_status") == "REJECTED":
+        return OUTCOME_REJECTED_BY_GUARD
+    if still_waiting:
+        return OUTCOME_WAITING
+    if human_record is not None:
+        return OUTCOME_HUMAN_OVERRIDE if override else OUTCOME_HUMAN_CONFIRMED
+    return OUTCOME_AUTO  # AUTO/REUSED standalone, or a DECIDER record whose
+    # own primary question resolved automatically even though the batch
+    # escalated overall (see _emit's "escalated by other question" suffix)
+
+
 def decision_icon(record: dict) -> str:
     """⏳ while a decision is still awaiting a human, ✅ once it's answered
     or auto-resolved, ⛔ when a human's answer was rejected by a guard --
@@ -128,9 +164,11 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
     "Awaiting human" -- never a stale one left behind after it WAS answered.
 
     Returns one dict per row: checkpoint, icon, decision_text (already
-    carries the "(human)"/"Rejected by guard"/override wording -- callers
-    render it as-is, no further interpretation), confidence, threshold,
-    route, source, override (bool).
+    carries the "(human)"/"Rejected by guard"/override/escalated-by-other-
+    question wording -- callers render it as-is, no further
+    interpretation), confidence, threshold, route, source, override (bool),
+    outcome (a short, stable pill-ready literal -- see OUTCOME_* and
+    _outcome_for).
     """
     rows: list[dict] = []
     pending: dict[str, dict] = {}
@@ -151,6 +189,30 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
             if suggestion is not None and human_choice is not None and suggestion != human_choice:
                 override = True
                 decision_text = f"{decision_text}, override of Decider's {suggestion!r} suggestion"
+        # A DECIDER record whose own PRIMARY question resolved AUTO (a real
+        # answer, not "Awaiting human") yet whose overall route is still
+        # ESCALATED: some OTHER question in the batch (a grounding/ambiguity
+        # noul) needed a human, resolved via a different control entirely
+        # (e.g. rule-match resolution) -- never a HUMAN_ESCALATION record
+        # for THIS checkpoint, so human_record is None here.
+        if (
+            decider_record is not None
+            and human_record is None
+            and primary is not None
+            and primary.get("answer") is not None
+            and base_record.get("route") == "ESCALATED"
+        ):
+            decision_text = f"{decision_text} (escalated by rule-match/ambiguity questions)"
+        # Genuinely still paused on this exact question: a decider_record
+        # with no pairing human answer, whose own primary choice question
+        # is itself unanswered (as opposed to the escalated-by-other-
+        # question case just above, where primary DID answer). Computed
+        # here, not re-derived from decider_decision_value's prose, so
+        # _outcome_for's WAITING classification can never drift from what
+        # this function already knows structurally about the record.
+        still_waiting = decider_record is not None and human_record is None and (
+            primary is None or primary.get("answer") is None
+        )
         rows.append(
             {
                 "checkpoint": base_record.get("checkpoint"),
@@ -161,6 +223,7 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
                 "route": base_record.get("route"),
                 "source": base_record.get("decision_source"),
                 "override": override,
+                "outcome": _outcome_for(base_record, human_record, override, still_waiting=still_waiting),
             }
         )
 
@@ -183,3 +246,33 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
         _emit(decider_record, None)  # genuinely still awaiting human
 
     return rows
+
+
+# checkpoints._checkpoint_name's tool->checkpoint mapping, in the fixed
+# pipeline order the Analysis page's live trace shows them.
+ALL_CHECKPOINTS = ["AMBIGUITY+STRATEGY", "COVERAGE", "FAILURE", "COMPLETION"]
+
+
+def pad_not_reached_rows(rows: list[dict]) -> list[dict]:
+    """UI-only (the Analysis page's live decision trace): appends a greyed
+    "not reached" row for every checkpoint in ALL_CHECKPOINTS absent from
+    rows, in ALL_CHECKPOINTS order, after the real rows. report.md and the
+    Scenarios/Results pages never call this -- a finished run's
+    decisions.json already has an entry for every checkpoint it reached,
+    and report.md documents only what happened, never padded placeholders."""
+    seen = {row["checkpoint"] for row in rows}
+    return rows + [
+        {
+            "checkpoint": checkpoint,
+            "icon": "⬜",
+            "decision_text": "not reached",
+            "confidence": None,
+            "threshold": None,
+            "route": None,
+            "source": None,
+            "override": False,
+            "outcome": "not reached",
+        }
+        for checkpoint in ALL_CHECKPOINTS
+        if checkpoint not in seen
+    ]

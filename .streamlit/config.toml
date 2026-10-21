@@ -14,12 +14,13 @@ toolbarMode = "viewer"
 # -- only the top bar (via scoped CSS in ui.py) and the sidebar (below) are
 # dark navy, per the owner-approved layout change.
 primaryColor = "#0D9488"
-# Native gap under the header (Streamlit reserves the header's own height
-# automatically on top of this) -- the officially recommended way to add
-# top/bottom clearance, instead of CSS .block-container padding. Tightened
-# from 2rem/none to 1rem per the layout-tightening pass.
-paddingTop = "1rem"
-paddingBottom = "1rem"
+# .block-container's padding (all four sides) is now pinned entirely by
+# CSS in ui_components.AAE_CSS (24px 28px, per the polish-1 design
+# tokens) -- these native theme paddings are zeroed so the two mechanisms
+# never stack (a non-zero value here would double-count on top of the CSS
+# rule).
+paddingTop = "0rem"
+paddingBottom = "0rem"
 
 [theme.sidebar]
 backgroundColor = "#0F1B2D"
