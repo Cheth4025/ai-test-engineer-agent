@@ -55,6 +55,7 @@ import streamlit as st
 
 from ai_test_engineer import checkpoints, orchestration, reporting, ui_components
 from ai_test_engineer.decision_trace import (
+    PRIMARY_CHOICE_QUESTIONS,
     build_decision_trace,
     decider_decision_value,
     decision_icon,
@@ -117,6 +118,15 @@ OPTIONS_FOR_TOOL: dict[str, list[str]] = {
     "generate_scenarios": ["GENERATE_TESTS", "REQUEST_CLARIFICATION"],
     "finalize_analysis": ["INVESTIGATE_FAILURE", "REPORT_FAILURE"],
     "render_report": ["FINALIZE_RESULTS", "NOT_READY"],
+}
+
+# checkpoints._checkpoint_name's tool->checkpoint mapping, duplicated here
+# for the same reason as OPTIONS_FOR_TOOL above (presentation only).
+CHECKPOINT_FOR_TOOL = {
+    "generate_scenarios": "AMBIGUITY+STRATEGY",
+    "save_scenario_set": "COVERAGE",
+    "finalize_analysis": "FAILURE",
+    "render_report": "COMPLETION",
 }
 
 TERMINAL_WORKFLOW_STATES = {"COMPLETED", "REJECTED", "BLOCKED", "STOPPED"}
@@ -1044,17 +1054,37 @@ def _approval_trace_row(approval: dict | None) -> dict | None:
     }
 
 
+def _confirm_decision_summary(pending: dict) -> tuple[str, float | None, float | None]:
+    """One-line context summary for the compact confirm-decision card
+    (05_analysis.png's "Checkpoint COVERAGE · coverage 4/5, BR06
+    uncovered" shape) plus the primary bounded-choice question's own
+    confidence/threshold for the confidence bar -- the same question
+    decision_trace.py's shared formatter reads for decisions.json rows,
+    just addressed by dict key here since pending["verdicts"] is keyed by
+    question name instead of a per_question list."""
+    checkpoint = CHECKPOINT_FOR_TOOL.get(pending["tool_name"], pending["tool_name"])
+    primary_name = next((name for name in pending["verdicts"] if name in PRIMARY_CHOICE_QUESTIONS), None)
+    primary = pending["verdicts"].get(primary_name) if primary_name else None
+    suggestion = primary.get("suggestion") if primary else None
+    confidence = round4(primary.get("confidence")) if primary else None
+    threshold = round4(_decider_cfg().get("choice_threshold")) if primary else None
+
+    coverage = (pending.get("context") or {}).get("coverage")
+    coverage_part = f" · coverage {coverage['covered']}/{coverage['required']}" if coverage else ""
+    summary = f"Checkpoint {checkpoint}{coverage_part}"
+    if suggestion:
+        summary += f" · Decider suggests {suggestion}"
+    return summary, confidence, threshold
+
+
 def _render_confirm_decision(state: UIState, controller: RunController) -> None:
     pending = controller.pending_decision
     _render_action_anchor()  # whenever this renders, pending_action always names "decision" here
     st.subheader("Confirm decision")
-    st.caption(f"checkpoint tool: {pending['tool_name']}")
-    for name, fields in pending["verdicts"].items():
-        st.write(
-            f"**{name}** -- suggestion: `{fields['suggestion']}`, "
-            f"confidence: {round4(fields['confidence'])}, route: {fields['route']}, "
-            f"probabilities: {round4_probabilities(fields['probabilities'])}"
-        )
+    summary, confidence, threshold = _confirm_decision_summary(pending)
+    st.write(f"**{summary}**")
+    if confidence is not None and threshold is not None:
+        st.markdown(ui_components.conf_bar(confidence, threshold), unsafe_allow_html=True)
 
     options = options_for(pending["tool_name"])
 
@@ -1199,39 +1229,162 @@ def _render_page_requirements(state: UIState, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _render_rule_match_rows(state: UIState, controller: RunController, selected_version: int, entry: dict) -> None:
-    """One compact row per unresolved rule-match item: scenario | claims
-    rules | Decider call | [Matches] [No match], with the optional note
-    collapsed into a small expander so the default row stays one line
-    tall (05_analysis.png's "Decision inbox · Rule match" table). Each row
+def _rule_match_answerable_ids(entry: dict) -> list[str]:
+    """Every scenario whose grounding verdict ever needed a human call --
+    the same NOT_GROUNDED/NEEDS_REVIEW set RunController.
+    unresolved_grounding_flags() filters on -- in scenario order, whether
+    already answered or not. Used both to gate whether the rule-match
+    inbox card renders at all (polish-2 group C8: it now stays visible
+    once every item is answered, instead of disappearing) and to iterate
+    its rows."""
+    scenarios = (entry["scenarios"] or {}).get("scenarios", [])
+    grounding_items = {item["scenario_id"]: item for item in (entry["grounding"] or {}).get("items", [])}
+    return [
+        s["scenario_id"]
+        for s in scenarios
+        if grounding_items.get(s["scenario_id"], {}).get("verdict") in {"NOT_GROUNDED", "NEEDS_REVIEW"}
+    ]
+
+
+def _rule_match_added_ids(versions_list: list[dict], latest_entry: dict) -> frozenset[str]:
+    """Scenarios newly added by remediation in latest_entry, vs. the
+    immediately previous version -- the single source both
+    _rule_match_version_context's wording and _render_rule_match_rows'
+    "New in vN" badge/tint read, so they can never drift apart."""
+    if latest_entry["version"] <= 1 or len(versions_list) < 2:
+        return frozenset()
+    previous_scenarios = (versions_list[-2]["scenarios"] or {}).get("scenarios", [])
+    current_scenarios = (latest_entry["scenarios"] or {}).get("scenarios", [])
+    return frozenset(added_by_remediation(previous_scenarios, current_scenarios))
+
+
+def _rule_match_version_context(versions_list: list[dict], latest_entry: dict) -> str:
+    """v1: a plain version label. v2+ (polish-2 group C9): names what
+    changed -- the scenario(s) added by remediation and the rules they
+    cover, derived purely by diffing this version's scenarios against the
+    previous one (added_by_remediation), never invented."""
+    version = latest_entry["version"]
+    scenarios = (latest_entry["scenarios"] or {}).get("scenarios", [])
+    added_ids = _rule_match_added_ids(versions_list, latest_entry)
+    if not added_ids:
+        return f"v{version}"
+    added = [s for s in scenarios if s["scenario_id"] in added_ids]
+    names = ", ".join(s["scenario_id"] for s in added)
+    rules = sorted({r for s in added for r in s.get("rule_ids", [])})
+    rules_text = ", ".join(rules) if rules else "the gap"
+    return f"v{version} · after remediation — {names} added to close the {rules_text} gap. Re-check all {len(scenarios)}."
+
+
+def _rule_match_previous_resolutions(versions_list: list[dict], latest_entry: dict) -> dict[str, str]:
+    """scenario_id -> "Yes"/"No" from the PREVIOUS version's grounding
+    resolution, for scenarios re-checked in this version (polish-2 group
+    C9's "v1: Yes" hint) -- never pre-selects the new row's answer, just
+    shows what it was before."""
+    if latest_entry["version"] <= 1 or len(versions_list) < 2:
+        return {}
+    previous_entry = versions_list[-2]
+    previous_items = (previous_entry["grounding"] or {}).get("items", [])
+    resolutions = {}
+    for item in previous_items:
+        if item.get("human_resolution") == "CONFIRMED_GROUNDED":
+            resolutions[item["scenario_id"]] = "Yes"
+        elif item.get("human_resolution") == "CONFIRMED_NOT_GROUNDED":
+            resolutions[item["scenario_id"]] = "No"
+    return resolutions
+
+
+def _render_rule_match_rows(
+    state: UIState,
+    controller: RunController,
+    selected_version: int,
+    entry: dict,
+    *,
+    added_ids: frozenset[str] = frozenset(),
+    previous_resolutions: dict[str, str] | None = None,
+) -> None:
+    """One row per rule-match item that ever needed a human call (05_
+    analysis.png's "Matches its rules?" table): a live Yes/No form while
+    unanswered, a static colored row once answered -- answered rows stay
+    visible (never removed; see _rule_match_answerable_ids), the row just
+    answered gets a brief CSS highlight plus a toast. Each unanswered row
     is still its own st.form (same no-stale-default guarantee as the
-    original radio+submit design) -- two submit buttons instead of a
-    radio, each committing its own literal CONFIRMED_GROUNDED/
-    CONFIRMED_NOT_GROUNDED choice directly (internal literals unchanged)."""
+    original radio+submit design) -- two submit buttons, each committing
+    its own literal CONFIRMED_GROUNDED/CONFIRMED_NOT_GROUNDED choice
+    directly (internal literals, and resolution-counting via
+    unresolved_grounding_flags()/approval_blockers(), both unchanged --
+    this function only changes how an answered item is DISPLAYED).
+    added_ids/previous_resolutions (polish-2 group C9): a scenario newly
+    added by remediation gets a "New in v{version}" badge + tinted row; a
+    re-checked scenario shows its v1 resolution as a hint, never
+    pre-selected."""
+    previous_resolutions = previous_resolutions or {}
     scenarios = (entry["scenarios"] or {}).get("scenarios", [])
     catalog = {s["scenario_id"]: s for s in scenarios}
-    current_action = pending_action(controller, [entry])
+    grounding_items = {item["scenario_id"]: item for item in (entry["grounding"] or {}).get("items", [])}
+    answerable_ids = _rule_match_answerable_ids(entry)
+    answered_count = len(answerable_ids) - len(entry["unresolved_grounding"])
 
-    for index, scenario_id in enumerate(entry["unresolved_grounding"]):
-        if index == 0 and current_action is not None and current_action["kind"] == "grounding":
-            _render_action_anchor()
+    st.markdown(
+        ui_components.small_caption(f"{answered_count} of {len(answerable_ids)} answered"),
+        unsafe_allow_html=True,
+    )
+
+    current_action = pending_action(controller, [entry])
+    just_answered_id, just_answered_label = st.session_state.pop("_rule_match_just_answered", (None, None))
+    anchor_rendered = False
+
+    for scenario_id in answerable_ids:
+        item = grounding_items[scenario_id]
         scenario = catalog.get(scenario_id, {})
-        with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
-            cols = st.columns([2, 2, 2, 2])
-            cols[0].markdown(f"**{ui_components.escape(scenario_id)}** — {ui_components.escape(scenario.get('title', '—'))}")
-            cols[1].markdown(ui_components.escape(", ".join(scenario.get("rule_ids", []))))
-            cols[2].markdown("Decider: review needed")
-            with cols[3]:
-                button_cols = st.columns(2)
-                matches_clicked = button_cols[0].form_submit_button("Matches", disabled=state.worker_busy)
-                no_match_clicked = button_cols[1].form_submit_button("No match", disabled=state.worker_busy)
-            with st.expander("Note (optional)"):
-                note = st.text_input("Note", key=f"note_{selected_version}_{scenario_id}", label_visibility="collapsed")
-            if matches_clicked or no_match_clicked:
-                resolution = "CONFIRMED_GROUNDED" if matches_clicked else "CONFIRMED_NOT_GROUNDED"
-                with state.lock:  # serialize against a worker thread writing the same run's files
-                    controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
-                st.rerun()
+
+        if item.get("human_resolution") is None:
+            if not anchor_rendered and current_action is not None and current_action["kind"] == "grounding":
+                _render_action_anchor()
+                anchor_rendered = True
+            new_badge = ui_components.pill(f"New in v{selected_version}", "new-in-version") if scenario_id in added_ids else ""
+            hint = f" · v1: {previous_resolutions[scenario_id]}" if scenario_id in previous_resolutions else ""
+            with st.form(key=f"resolve_{selected_version}_{scenario_id}"):
+                cols = st.columns([2, 2, 3, 3])
+                cols[0].markdown(
+                    f"**{ui_components.escape(scenario_id)}** — {ui_components.escape(scenario.get('title', '—'))}"
+                    f"{ui_components.escape(hint)} {new_badge}",
+                    unsafe_allow_html=True,
+                )
+                cols[1].markdown(ui_components.escape(", ".join(scenario.get("rule_ids", []))))
+                p_yes = item.get("p_yes")
+                if p_yes is not None:
+                    decider_label = "Matches" if p_yes >= 0.5 else "No match"
+                    cols[2].markdown(f"{decider_label} · {round4(item.get('confidence'))}")
+                else:
+                    cols[2].markdown("Decider: review needed")
+                with cols[3]:
+                    button_cols = st.columns(2)
+                    yes_clicked = button_cols[0].form_submit_button("Yes", disabled=state.worker_busy)
+                    no_clicked = button_cols[1].form_submit_button("No", disabled=state.worker_busy)
+                with st.expander("Note (optional)"):
+                    note = st.text_input("Note", key=f"note_{selected_version}_{scenario_id}", label_visibility="collapsed")
+                if yes_clicked or no_clicked:
+                    resolution = "CONFIRMED_GROUNDED" if yes_clicked else "CONFIRMED_NOT_GROUNDED"
+                    with state.lock:  # serialize against a worker thread writing the same run's files
+                        controller.resolve_grounding(selected_version, scenario_id, resolution, note or None)
+                    st.session_state["_rule_match_just_answered"] = (scenario_id, "Yes" if yes_clicked else "No")
+                    st.rerun()
+        else:
+            answered_label = "✅ Yes" if item["human_resolution"] == "CONFIRMED_GROUNDED" else "✗ No"
+            highlight_class = " aae-row--just-answered" if scenario_id == just_answered_id else ""
+            new_class = " aae-row--new-in-version" if scenario_id in added_ids else ""
+            new_badge = ui_components.pill(f"New in v{selected_version}", "new-in-version") if scenario_id in added_ids else ""
+            st.markdown(
+                f'<div class="aae-rule-match-row{highlight_class}{new_class}">'
+                f'<span class="aae-rule-match-cell"><strong>{ui_components.escape(scenario_id)}</strong> — '
+                f'{ui_components.escape(scenario.get("title", "—"))} {new_badge}</span>'
+                f'<span class="aae-rule-match-cell">{ui_components.escape(", ".join(scenario.get("rule_ids", [])))}</span>'
+                f'<span class="aae-rule-match-cell aae-rule-match-answer">{answered_label}</span>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            if scenario_id == just_answered_id:
+                st.toast(f"{scenario_id} marked: {just_answered_label}")
 
 
 def _render_page_analysis(state: UIState, data: dict) -> None:
@@ -1271,17 +1424,32 @@ def _render_page_analysis(state: UIState, data: dict) -> None:
         and controller.pending_decision.get("tool_name") in _ANALYSIS_DECISION_TOOLS
     )
     latest_entry = versions_list[-1] if versions_list else None
-    has_unresolved_rule_match = bool(latest_entry and latest_entry["unresolved_grounding"])
+    # polish-2 group C8: the card stays visible once every rule-match item
+    # is answered (it no longer disappears the instant the last one is
+    # resolved) -- gated on "this version ever had any", not "still has
+    # unresolved ones".
+    has_rule_match_items = bool(latest_entry and _rule_match_answerable_ids(latest_entry))
 
-    if has_pending_decision or has_unresolved_rule_match:
+    if has_pending_decision or has_rule_match_items:
         inbox_left, inbox_right = st.columns(2)
         if has_pending_decision:
             with inbox_left, ui_components.widget_card_container("decision-inbox"):
                 _render_confirm_decision(state, controller)
-        if has_unresolved_rule_match:
+        if has_rule_match_items:
             with inbox_right, ui_components.widget_card_container("rule-match-inbox"):
-                _card_heading(f"Decision inbox · Rule match (v{latest_entry['version']})")
-                _render_rule_match_rows(state, controller, latest_entry["version"], latest_entry)
+                _card_heading("Matches its rules?")
+                st.markdown(
+                    ui_components.small_caption(_rule_match_version_context(versions_list, latest_entry)),
+                    unsafe_allow_html=True,
+                )
+                _render_rule_match_rows(
+                    state,
+                    controller,
+                    latest_entry["version"],
+                    latest_entry,
+                    added_ids=_rule_match_added_ids(versions_list, latest_entry),
+                    previous_resolutions=_rule_match_previous_resolutions(versions_list, latest_entry),
+                )
 
     if controller is not None:
         trace_rows = pad_not_reached_rows(build_decision_trace(data.get("decisions") or [], _decider_cfg()))

@@ -57,6 +57,9 @@ PILL_VARIANTS: dict[str, tuple[str, str]] = {
     # ones, or pill() raises and takes the whole page down.
     "error": ("#FFF1D6", "#7A4D00"),  # reuses the "waiting" amber -- distinct from a plain assertion FAIL
     "skipped": ("#F0F3F7", "#3A4757"),  # neutral grey, same tone as a table header
+    # polish-2 group C9: a scenario added to the rule-match inbox by a
+    # remediation round, re-using "added-remediation"'s solid teal.
+    "new-in-version": ("#0D9488", "#FFFFFF"),
 }
 
 _CARD_TONES = {"default", "gap", "decider", "failure"}
@@ -739,6 +742,31 @@ AAE_CSS = f"""
     z-index: -1;
 }}
 .aae-progress-connector--filled {{ background-color: #2DD4BF; }}
+
+/* -- Rule-match inbox answered rows (polish-2 group C8/C9) -- a static
+   row for an already-answered item, same visual column rhythm as the
+   active form's st.columns([2, 2, 3, 3]). -- */
+.aae-rule-match-row {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 4px;
+    font-size: 13px;
+    border-bottom: 1px solid #EEF1F5;
+}}
+.aae-rule-match-cell {{ flex: 2 1 0; }}
+.aae-rule-match-answer {{ flex: 1 1 0; font-weight: 600; text-align: right; }}
+.aae-row--new-in-version {{ background-color: #E6F2F1; border-radius: 6px; }}
+.aae-row--just-answered {{
+    animation: aae-row-flash 1.5s ease-out forwards;
+}}
+@keyframes aae-row-flash {{
+    0% {{ background-color: #CFEFE9; }}
+    100% {{ background-color: transparent; }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+    .aae-row--just-answered {{ animation: none; background-color: #CFEFE9; }}
+}}
 
 /* -- Busy indicator (polish-2 group A3): shown at the top of every page
    only while state.worker_busy is True. Pure CSS pulse -- no spinner

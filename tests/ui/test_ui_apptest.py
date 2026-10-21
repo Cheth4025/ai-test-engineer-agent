@@ -528,10 +528,12 @@ def test_rule_match_buttons_disabled_while_a_worker_is_busy(monkeypatch, tmp_pat
     """Every other mutating control (Start Analysis, Confirm decision,
     Approve, Reject, Execute) disables itself while state.worker_busy is
     True, so a human can't fire a second write while a background worker
-    is already writing this run's files. The Matches/No match buttons
-    must do the same -- resolve_grounding() writes grounding_v{N}.json,
-    which can race a concurrent REMEDIATE_GAP/RESCORING cycle writing the
-    same file for the same run."""
+    is already writing this run's files. The Yes/No buttons (polish-2
+    group C8 -- renamed from Matches/No match; internal resolution
+    literals CONFIRMED_GROUNDED/CONFIRMED_NOT_GROUNDED unchanged) must do
+    the same -- resolve_grounding() writes grounding_v{N}.json, which can
+    race a concurrent REMEDIATE_GAP/RESCORING cycle writing the same file
+    for the same run."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
     monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
@@ -556,20 +558,171 @@ def test_rule_match_buttons_disabled_while_a_worker_is_busy(monkeypatch, tmp_pat
     at.run()
     at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _settle(at, lambda a: _has_label(a, "button", "Matches"))
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
 
-    assert all(b.disabled is False for b in at.button if b.label == "Matches")
+    assert all(b.disabled is False for b in at.button if b.label == "Yes")
 
     next(r for r in at.radio if r.label == "Your choice").set_value("ACCEPT_COVERAGE").run()
     next(b for b in at.button if b.label == "Confirm decision").click().run()  # worker_busy=True now
 
-    assert any(b.label == "Matches" for b in at.button)
-    assert all(b.disabled is True for b in at.button if b.label == "Matches")
-    assert all(b.disabled is True for b in at.button if b.label == "No match")
+    assert any(b.label == "Yes" for b in at.button)
+    assert all(b.disabled is True for b in at.button if b.label == "Yes")
+    assert all(b.disabled is True for b in at.button if b.label == "No")
 
     release.set()
     time.sleep(0.1)
     at.run()
+
+
+def _register_run_with_two_rule_match_items(tmp_path) -> RunController:
+    """Two scenarios needing rule-match confirmation -- one already
+    answered (human_resolution set), one still pending -- so C8's
+    "answered rows stay visible" behavior has something real to assert
+    against alongside a still-active row."""
+    paused_result = _register_paused_run(
+        tmp_path,
+        "run-1",
+        "save_scenario_set",
+        verdicts={
+            "coverage_action": {
+                "answer": None,
+                "suggestion": "ACCEPT_COVERAGE",
+                "confidence": 0.9,
+                "probabilities": {"ACCEPT_COVERAGE": 0.9, "REMEDIATE_GAP": 0.1},
+                "route": "ESCALATE",
+            }
+        },
+    )
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+    controller.save_evidence(
+        "scenarios_v1.json",
+        {
+            "version": 1,
+            "scenarios": [
+                {"scenario_id": "S01", "title": "Initial success", "rule_ids": ["BR01"]},
+                {"scenario_id": "S02", "title": "Timeout retry", "rule_ids": ["BR01", "BR02"]},
+            ],
+        },
+    )
+    controller.save_evidence(
+        "grounding_v1.json",
+        {
+            "scenario_set_version": 1,
+            "items": [
+                # Already answered -- verdict stays NEEDS_REVIEW (resolve_
+                # grounding() never rewrites it, only sets human_resolution;
+                # a real GROUNDED item is never eligible for human input at
+                # all, so "already answered" always keeps its original
+                # NOT_GROUNDED/NEEDS_REVIEW verdict).
+                {"scenario_id": "S01", "verdict": "NEEDS_REVIEW", "p_yes": 0.62, "confidence": 0.62, "human_resolution": "CONFIRMED_GROUNDED"},
+                {"scenario_id": "S02", "verdict": "NEEDS_REVIEW", "p_yes": 0.51, "confidence": 0.51, "human_resolution": None},
+            ],
+        },
+    )
+    return controller, paused_result
+
+
+def test_rule_match_header_shows_question_decider_score_and_answered_count(
+    monkeypatch, tmp_path, ui_script_path
+):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Matches its rules?" in markdown_text
+    assert "Matches · 0.51" in markdown_text  # S02's real Decider call + score, not "review needed"
+    assert "review needed" not in markdown_text
+    assert "1 of 2 answered" in markdown_text
+
+
+def test_answered_rule_match_rows_stay_visible_without_reopening_the_form(
+    monkeypatch, tmp_path, ui_script_path
+):
+    """S01 is already answered in the fixture -- it must render as a
+    static colored row (not a Matches/Yes-No form) and must stay visible,
+    not disappear from the card. Resolving S02 then must not make it
+    disappear either, and must not reopen S01's form."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "S01" in markdown_text
+    assert '✅ Yes' in markdown_text
+    # Only S02 (still pending) has an active Yes/No form -- S01 does not.
+    assert len([b for b in at.button if b.label == "Yes"]) == 1
+
+    next(b for b in at.button if b.label == "Yes").click().run()
+    at = _settle(at, lambda a: "S02 marked: Yes" in " ".join(t.value for t in a.toast))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "S01" in markdown_text and "S02" in markdown_text
+    assert markdown_text.count('✅ Yes') == 2
+    assert not any(b.label == "Yes" for b in at.button)  # no form left -- both answered
+
+
+def test_rule_match_display_change_does_not_affect_resolution_counting(monkeypatch, tmp_path, ui_script_path):
+    """Guardrail: showing answered rows must not change what counts as
+    resolved -- unresolved_grounding_flags/approval_blockers, read
+    directly off the controller, must shrink exactly as before once S02
+    is answered, independent of anything the UI displays."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    assert controller.unresolved_grounding_flags(1) == ["S02"]
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+    next(b for b in at.button if b.label == "Yes").click().run()
+    at = _settle(at, lambda a: not _has_label(a, "button", "Yes"))
+
+    assert controller.unresolved_grounding_flags(1) == []
+
+
+def test_confirm_decision_card_is_compact_not_a_raw_verdict_dump(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 group C7: 05_analysis.png's compact inbox shape -- a
+    one-line suggestion plus a confidence bar with a tau marker, not the
+    old st.write per-question dump (backtick suggestion/probabilities
+    lines). The safe radio pattern itself (index=None, escalation-scoped
+    key, disabled-until-chosen Confirm) is unchanged -- only the summary
+    rendered above it."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "aae-conf-bar" in markdown_text
+    assert "aae-conf-tau" in markdown_text
+    assert "REMEDIATE_GAP" in markdown_text  # the Decider's real suggestion, in the one-line summary
+    assert "-- suggestion: `" not in markdown_text
+    assert "probabilities:" not in markdown_text
+
+    # Unchanged: still the same safe radio pattern.
+    radio = next(r for r in at.radio if r.label == "Your choice")
+    assert radio.value is None
+    assert next(b for b in at.button if b.label == "Confirm decision").disabled is True
 
 
 def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
