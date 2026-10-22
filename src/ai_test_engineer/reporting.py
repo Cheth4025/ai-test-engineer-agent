@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_test_engineer.bedrock import DEFAULT_MODEL_ID
-from ai_test_engineer.decision_trace import build_decision_trace
+from ai_test_engineer.decision_trace import build_decision_trace, label_decision_trace
 from ai_test_engineer.state import RunController
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
@@ -73,18 +73,24 @@ def _failure_detail_md(analysis: dict | None) -> str:
 
 
 def _decision_trace_md(decisions: list[dict] | None, decider_cfg: dict) -> str:
-    rows = build_decision_trace(decisions or [], decider_cfg)
+    rows = label_decision_trace(build_decision_trace(decisions or [], decider_cfg))
     if not rows:
         return "No decisions recorded."
     header = "| Checkpoint | Decision | Confidence vs τ | Outcome | Route | Source |\n|---|---|---|---|---|---|"
     lines = []
     for row in rows:
-        confidence = row["confidence"] if row["confidence"] is not None else "—"
-        threshold = row["threshold"] if row["threshold"] is not None else "—"
-        conf_text = f"{confidence} vs {threshold}" if row["confidence"] is not None else "—"
+        if row["confidence"] is not None and row["threshold"] is not None:
+            conf_text = f"{row['confidence']:.2f} vs {row['threshold']:.2f}"
+        else:
+            conf_text = "—"
+        # detail (polish-2 group D12): report.md has no tooltips, so the
+        # override/escalated-by-other-question explanation goes in the
+        # Outcome cell as a parenthetical instead of a long Decision
+        # sentence.
+        outcome_cell = f"{row['outcome']} ({row['detail']})" if row.get("detail") else row["outcome"]
         lines.append(
-            f"| {row['checkpoint']} | {row['icon']} {row['decision_text']} | {conf_text} | "
-            f"{row['outcome']} | {row['route']} | {row['source']} |"
+            f"| {row['label']} | {row['icon']} {row['decision_text']} | {conf_text} | "
+            f"{outcome_cell} | {row['route']} | {row['source']} |"
         )
     return "\n".join([header, *lines])
 

@@ -27,7 +27,7 @@ import pytest
 pytest.importorskip("streamlit.testing.v1")
 from streamlit.testing.v1 import AppTest
 
-from ai_test_engineer import orchestration
+from ai_test_engineer import orchestration, ui
 from ai_test_engineer.state import RunController
 
 
@@ -109,6 +109,27 @@ def _navigate(at: AppTest, nav_id: str) -> AppTest:
 # ---------------------------------------------------------------------------
 
 
+def test_overview_page_uses_teal_accent_cards_checklist_and_table_header(monkeypatch, tmp_path, ui_script_path):
+    # polish-2 group F15: Overview's four cards get a teal left-accent
+    # heading, the Business Rules table a teal header, and the two lists
+    # teal check/numbered icons instead of plain bullets/numbers.
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    at = _app(ui_script_path)
+    at.run()
+
+    assert not at.exception
+    markdown_text = " ".join(m.value for m in at.markdown)
+    # The rendered class attribute, not the bare class name -- the
+    # injected <style> block legitimately contains the bare selector text
+    # too (same false-positive trap as Group B's KPI-row ordering test).
+    assert markdown_text.count('class="aae-card aae-card--teal-accent"') == 4
+    assert "aae-table--teal-header" in markdown_text
+    assert "aae-checklist" in markdown_text
+    assert "aae-numbered-steps" in markdown_text
+    assert "Handle payment timeouts and retries" in markdown_text
+    assert "Reads the requirement and extracts the rules" in markdown_text
+
+
 def test_app_loads_on_overview_with_nav_and_no_start_button(monkeypatch, tmp_path, ui_script_path):
     """Overview is static reference content only (polish-1): Start Analysis
     moved to the new Analysis nav item, which is now the 2nd of 5 pages."""
@@ -157,6 +178,89 @@ def test_sidebar_navigation_reaches_all_five_pages_with_right_titles(monkeypatch
         at = _navigate(at, nav_id)
         assert not at.exception
         assert at.title[0].value == title
+
+
+def test_all_five_pages_render_without_exception_across_fixture_states(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 no-regression guardrail #4: after every group's commit, all
+    5 pages must render without exception across pre-run, mid-run (a
+    pending Decider decision plus an unresolved rule-match item together,
+    the real shape save_scenario_set escalations produce), approved, and
+    completed. Not a content assertion -- test_sidebar_navigation_reaches_
+    all_five_pages_with_right_titles already checks titles on the fresh
+    state; this is the smoke net for every other state the branch touches."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+
+    nav_ids = ("requirements", "analysis", "scenarios", "execution", "results")
+
+    # 1. Pre-run.
+    at = _app(ui_script_path)
+    at.run()
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"pre-run/{nav_id}"
+
+    # 2. Mid-run: a pending COVERAGE decision plus an unresolved rule-match
+    # item in the same verdicts batch (grounding_S03 escalated, not just
+    # coverage_action -- the real combined shape).
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path / "mid"))
+    verdicts = {
+        "grounding_S03": {
+            "answer": None,
+            "suggestion": True,
+            "confidence": 0.51,
+            "probabilities": {"true": 0.51, "false": 0.49},
+            "route": "ESCALATE",
+        },
+        "coverage_action": {
+            "answer": None,
+            "suggestion": "REMEDIATE_GAP",
+            "confidence": 0.55,
+            "probabilities": {"ACCEPT_COVERAGE": 0.45, "REMEDIATE_GAP": 0.55},
+            "route": "ESCALATE",
+        },
+    }
+    paused_result = _register_paused_run(tmp_path / "mid", "run-1", "save_scenario_set", verdicts=verdicts)
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+    controller.save_evidence(
+        "grounding_v1.json",
+        {
+            "scenario_set_version": 1,
+            "items": [{"scenario_id": "S03", "verdict": "NEEDS_REVIEW", "confidence": 0.51, "human_resolution": None}],
+        },
+    )
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"mid-run/{nav_id}"
+
+    # 3. Approved.
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path / "approved"))
+    controller = _register_approved_run(tmp_path / "approved")
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"approved/{nav_id}"
+
+    # 4. Completed.
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path / "completed"))
+    controller = _register_completed_run(tmp_path / "completed")
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    for nav_id in nav_ids:
+        at = _navigate(at, nav_id)
+        assert not at.exception, f"completed/{nav_id}"
 
 
 def test_navigating_never_calls_orchestration_entry_points(monkeypatch, tmp_path, ui_script_path):
@@ -408,7 +512,8 @@ def test_action_banner_on_hosting_page_and_overview_for_pending_decision(monkeyp
 
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "confirm the Decider decision" in markdown_text
-    assert '<a href="#aae-action-anchor">Jump to it</a>' in markdown_text
+    # polish-2 group B4: the anchor is now teal-styled (aae-btn-teal).
+    assert '<a class="aae-btn-teal" href="#aae-action-anchor">Jump to it</a>' in markdown_text
 
     at = _navigate(at, "scenarios")
     markdown_text = " ".join(m.value for m in at.markdown)
@@ -444,10 +549,12 @@ def test_rule_match_buttons_disabled_while_a_worker_is_busy(monkeypatch, tmp_pat
     """Every other mutating control (Start Analysis, Confirm decision,
     Approve, Reject, Execute) disables itself while state.worker_busy is
     True, so a human can't fire a second write while a background worker
-    is already writing this run's files. The Matches/No match buttons
-    must do the same -- resolve_grounding() writes grounding_v{N}.json,
-    which can race a concurrent REMEDIATE_GAP/RESCORING cycle writing the
-    same file for the same run."""
+    is already writing this run's files. The Yes/No buttons (polish-2
+    group C8 -- renamed from Matches/No match; internal resolution
+    literals CONFIRMED_GROUNDED/CONFIRMED_NOT_GROUNDED unchanged) must do
+    the same -- resolve_grounding() writes grounding_v{N}.json, which can
+    race a concurrent REMEDIATE_GAP/RESCORING cycle writing the same file
+    for the same run."""
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
     monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
@@ -472,20 +579,199 @@ def test_rule_match_buttons_disabled_while_a_worker_is_busy(monkeypatch, tmp_pat
     at.run()
     at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
-    at = _settle(at, lambda a: _has_label(a, "button", "Matches"))
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
 
-    assert all(b.disabled is False for b in at.button if b.label == "Matches")
+    assert all(b.disabled is False for b in at.button if b.label == "Yes")
 
     next(r for r in at.radio if r.label == "Your choice").set_value("ACCEPT_COVERAGE").run()
     next(b for b in at.button if b.label == "Confirm decision").click().run()  # worker_busy=True now
 
-    assert any(b.label == "Matches" for b in at.button)
-    assert all(b.disabled is True for b in at.button if b.label == "Matches")
-    assert all(b.disabled is True for b in at.button if b.label == "No match")
+    assert any(b.label == "Yes" for b in at.button)
+    assert all(b.disabled is True for b in at.button if b.label == "Yes")
+    assert all(b.disabled is True for b in at.button if b.label == "No")
 
     release.set()
     time.sleep(0.1)
     at.run()
+
+
+def _register_run_with_two_rule_match_items(tmp_path) -> RunController:
+    """Two scenarios needing rule-match confirmation -- one already
+    answered (human_resolution set), one still pending -- so C8's
+    "answered rows stay visible" behavior has something real to assert
+    against alongside a still-active row."""
+    paused_result = _register_paused_run(
+        tmp_path,
+        "run-1",
+        "save_scenario_set",
+        verdicts={
+            "coverage_action": {
+                "answer": None,
+                "suggestion": "ACCEPT_COVERAGE",
+                "confidence": 0.9,
+                "probabilities": {"ACCEPT_COVERAGE": 0.9, "REMEDIATE_GAP": 0.1},
+                "route": "ESCALATE",
+            }
+        },
+    )
+    controller = orchestration._ACTIVE_RUNS["run-1"]["controller"]
+    controller.save_evidence(
+        "scenarios_v1.json",
+        {
+            "version": 1,
+            "scenarios": [
+                {"scenario_id": "S01", "title": "Initial success", "rule_ids": ["BR01"]},
+                {"scenario_id": "S02", "title": "Timeout retry", "rule_ids": ["BR01", "BR02"]},
+            ],
+        },
+    )
+    controller.save_evidence(
+        "grounding_v1.json",
+        {
+            "scenario_set_version": 1,
+            "items": [
+                # Already answered -- verdict stays NEEDS_REVIEW (resolve_
+                # grounding() never rewrites it, only sets human_resolution;
+                # a real GROUNDED item is never eligible for human input at
+                # all, so "already answered" always keeps its original
+                # NOT_GROUNDED/NEEDS_REVIEW verdict).
+                {"scenario_id": "S01", "verdict": "NEEDS_REVIEW", "p_yes": 0.62, "confidence": 0.62, "human_resolution": "CONFIRMED_GROUNDED"},
+                {"scenario_id": "S02", "verdict": "NEEDS_REVIEW", "p_yes": 0.51, "confidence": 0.51, "human_resolution": None},
+            ],
+        },
+    )
+    return controller, paused_result
+
+
+def test_rule_match_header_shows_question_decider_score_and_answered_count(
+    monkeypatch, tmp_path, ui_script_path
+):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Matches its rules?" in markdown_text
+    assert "Matches · 0.51" in markdown_text  # S02's real Decider call + score, not "review needed"
+    assert "review needed" not in markdown_text
+    assert "1 of 2 answered" in markdown_text
+
+    # polish-2 live-check round: one bold teal header line combining the
+    # version label with "Matches its rules?", the counter right-aligned
+    # on the SAME line (one aae-rule-match-header div, not two separate
+    # caption lines), plus a small column label above the Yes/No buttons.
+    # The rendered tag, not the bare class name -- the injected <style>
+    # block legitimately contains the literal CSS selector text too (same
+    # false-positive trap as Group B's KPI-row ordering test).
+    header_div = next(v for v in (m.value for m in at.markdown) if '<div class="aae-rule-match-header">' in v)
+    assert "Version 1 (v1) · Matches its rules?" in header_div
+    assert "1 of 2 answered" in header_div
+    assert "Rules match?" in markdown_text
+
+
+def test_rule_match_note_field_is_plain_text_input_not_an_expander(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+
+    assert not at.exception
+    assert len(at.expander) == 0  # no expander anywhere on this page
+    assert any(w.label == "Note (optional)" for w in at.text_input)
+
+
+def test_answered_rule_match_rows_stay_visible_without_reopening_the_form(
+    monkeypatch, tmp_path, ui_script_path
+):
+    """S01 is already answered in the fixture -- it must render as a
+    static colored row (not a Matches/Yes-No form) and must stay visible,
+    not disappear from the card. Resolving S02 then must not make it
+    disappear either, and must not reopen S01's form."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "S01" in markdown_text
+    assert '✅ Yes' in markdown_text
+    # Only S02 (still pending) has an active Yes/No form -- S01 does not.
+    assert len([b for b in at.button if b.label == "Yes"]) == 1
+
+    next(b for b in at.button if b.label == "Yes").click().run()
+    at = _settle(at, lambda a: "S02 marked: Yes" in " ".join(t.value for t in a.toast))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "S01" in markdown_text and "S02" in markdown_text
+    assert markdown_text.count('✅ Yes') == 2
+    assert not any(b.label == "Yes" for b in at.button)  # no form left -- both answered
+
+
+def test_rule_match_display_change_does_not_affect_resolution_counting(monkeypatch, tmp_path, ui_script_path):
+    """Guardrail: showing answered rows must not change what counts as
+    resolved -- unresolved_grounding_flags/approval_blockers, read
+    directly off the controller, must shrink exactly as before once S02
+    is answered, independent of anything the UI displays."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller, paused_result = _register_run_with_two_rule_match_items(tmp_path)
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+    assert controller.unresolved_grounding_flags(1) == ["S02"]
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "button", "Yes"))
+    next(b for b in at.button if b.label == "Yes").click().run()
+    at = _settle(at, lambda a: not _has_label(a, "button", "Yes"))
+
+    assert controller.unresolved_grounding_flags(1) == []
+
+
+def test_confirm_decision_card_is_compact_not_a_raw_verdict_dump(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 group C7: 05_analysis.png's compact inbox shape -- a
+    one-line suggestion plus a confidence bar with a tau marker, not the
+    old st.write per-question dump (backtick suggestion/probabilities
+    lines). The safe radio pattern itself (index=None, escalation-scoped
+    key, disabled-until-chosen Confirm) is unchanged -- only the summary
+    rendered above it."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    paused_result = _register_paused_run(tmp_path, "run-1", "save_scenario_set")
+    monkeypatch.setattr(orchestration, "run_initial_pass", lambda: paused_result)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "aae-conf-bar" in markdown_text
+    assert "aae-conf-tau" in markdown_text
+    assert "REMEDIATE_GAP" in markdown_text  # the Decider's real suggestion, in the one-line summary
+    assert "-- suggestion: `" not in markdown_text
+    assert "probabilities:" not in markdown_text
+
+    # Unchanged: still the same safe radio pattern.
+    radio = next(r for r in at.radio if r.label == "Your choice")
+    assert radio.value is None
+    assert next(b for b in at.button if b.label == "Confirm decision").disabled is True
 
 
 def test_confirm_decision_radio_has_no_preselection_and_confirm_disabled_until_chosen(
@@ -876,6 +1162,8 @@ def test_scenarios_page_shows_coverage_donuts_before_and_after(monkeypatch, tmp_
 
 
 def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypatch, tmp_path, ui_script_path):
+    # polish-2 group D12: confidence now renders to 2 decimals everywhere
+    # conf_bar is used (was bare {:g} straight off decisions.json).
     monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
     controller = _register_remediated_run(tmp_path, confidence=0.4242)
 
@@ -883,12 +1171,48 @@ def test_scenarios_page_decider_decision_block_shows_fixture_confidence(monkeypa
     at.run()
     at = _start_into_fixture(at, monkeypatch, controller)
     at = _navigate(at, "scenarios")
-    at = _settle(at, lambda a: any("0.4242" in m.value for m in a.markdown))
+    at = _settle(at, lambda a: any("0.42" in m.value for m in a.markdown))
 
     assert not at.exception
     markdown_text = " ".join(m.value for m in at.markdown)
-    assert "0.4242" in markdown_text
+    assert "0.42" in markdown_text
     assert "REMEDIATE_GAP" in markdown_text  # the real bounded choice, not "Confirm"/"Proceed"
+
+
+def test_scenarios_page_gherkin_with_blank_lines_reaches_st_html_intact(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 live-check round regression: real Gherkin can have blank
+    lines between steps. Markdown ends raw-HTML-block parsing at the
+    first blank line (CommonMark's own rule), so a blank-line-containing
+    <pre> passed to st.markdown(unsafe_allow_html=True) loses its box and
+    its remaining newlines -- confirmed live by the user. ui.py now
+    renders Gherkin via st.html(), which never runs the Markdown parser,
+    so this must survive intact: the <pre> tag, both keyword spans, and
+    the blank line itself all still present in the st.html element's own
+    value (not split into a separate markdown paragraph)."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_remediated_run(tmp_path)
+    scenarios_path = tmp_path / "run-1" / "scenarios_v2.json"
+    scenarios = json.loads(scenarios_path.read_text())
+    scenarios["scenarios"][0]["gherkin"] = "Scenario: S01\n\nGiven a valid payment\nWhen submitted"
+    scenarios_path.write_text(json.dumps(scenarios))
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "scenarios")
+    at = _settle(at, lambda a: len(a.tabs) >= 5)
+
+    assert not at.exception
+    html_values = [h.value for h in at.html]
+    gherkin_html = next(v for v in html_values if "a valid payment" in v)
+    assert '<pre class="aae-code aae-code--gherkin"' in gherkin_html
+    assert "\n\n" in gherkin_html  # the blank line survives, unlike through st.markdown
+    assert '<span class="aae-kw-scenario" style="color:#5EEAD4">Scenario</span>' in gherkin_html
+    assert '<span class="aae-kw-step" style="color:#93C5FD">Given</span> a valid payment' in gherkin_html
+
+    # And it must NOT have leaked into a markdown paragraph instead.
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "a valid payment" not in markdown_text
 
 
 def test_scenarios_page_gherkin_tabs_one_per_scenario(monkeypatch, tmp_path, ui_script_path):
@@ -1224,6 +1548,233 @@ def test_execute_button_unlocks_when_approved(monkeypatch, tmp_path, ui_script_p
     assert any("Ready to execute" in w.value for w in at.sidebar.warning)
 
 
+# ---------------------------------------------------------------------------
+# polish-2 Group A: FAILURE/COMPLETION decisions move onto Execution,
+# inline below the Approval/Execute card; confirming COMPLETION auto-
+# navigates to Results; a busy indicator shows only while a worker runs.
+# ---------------------------------------------------------------------------
+
+
+def _register_run_pending_failure_decision(tmp_path) -> RunController:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "approval.json").write_text(
+        json.dumps({"decision": "APPROVE", "reviewer": "Chethan", "comment": None, "timestamp": "2026-10-18T19:00:00Z"})
+    )
+    results = {
+        "execution_id": "run-1",
+        "return_code": 1,
+        "duration_ms": 400,
+        "tests": [
+            {"test_id": "T04", "scenario_id": "S04", "rule_ids": ["BR06"], "status": "FAIL", "duration_ms": 5, "expected": "1 ledger entry", "actual": "2 ledger entries", "failure_message": "assert 2 == 1", "evidence_reference": "execution/T04_evidence.json"},
+        ],
+        "junit_reference": "execution/junit.xml",
+        "log_reference": "execution/pytest_output.log",
+    }
+    (run_dir / "results.json").write_text(json.dumps(results))
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    # The escalation happens mid-tool-call, inside finalize_analysis's own
+    # processing -- tool_stage is already ANALYZING_RESULTS while paused
+    # here, same as a real run (orchestration.py sets it before the gated
+    # call that can escalate).
+    controller.set_stage("ANALYZING_RESULTS", orchestration.STAGE_TOOLS["ANALYZING_RESULTS"])
+    controller.set_pending_decision(
+        {
+            "tool_name": "finalize_analysis",
+            "context": {},
+            "verdicts": {
+                "failure_action": {
+                    "answer": None,
+                    "suggestion": "REPORT_FAILURE",
+                    "confidence": 0.28,
+                    "probabilities": {"INVESTIGATE_FAILURE": 0.72, "REPORT_FAILURE": 0.28},
+                    "route": "ESCALATE",
+                }
+            },
+            "escalation_seq": 1,
+        }
+    )
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def _register_run_pending_completion_decision(tmp_path) -> RunController:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "approval.json").write_text(
+        json.dumps({"decision": "APPROVE", "reviewer": "Chethan", "comment": None, "timestamp": "2026-10-18T19:00:00Z"})
+    )
+    results = {
+        "execution_id": "run-1",
+        "return_code": 1,
+        "duration_ms": 412,
+        "tests": [
+            {"test_id": "T04", "scenario_id": "S04", "rule_ids": ["BR06"], "status": "FAIL", "duration_ms": 5, "expected": "1 ledger entry", "actual": "2 ledger entries", "failure_message": "assert 2 == 1", "evidence_reference": "execution/T04_evidence.json"},
+        ],
+        "junit_reference": "execution/junit.xml",
+        "log_reference": "execution/pytest_output.log",
+    }
+    (run_dir / "results.json").write_text(json.dumps(results))
+    (run_dir / "analysis.json").write_text(
+        json.dumps(
+            {
+                "has_failure": True,
+                "test_id": "T04",
+                "rule_ids": ["BR06"],
+                "classification": "BUSINESS_RULE_VIOLATION",
+                "expected_behavior": "BR06: Re-delivery must not create another ledger posting.",
+                "actual_behavior": "Observed 2 ledger entries instead of 1.",
+                "impact": [],
+                "evidence_references": ["execution/T04_evidence.json"],
+                "handling_action": "REPORT_FAILURE",
+                "investigated": False,
+            }
+        )
+    )
+    controller = RunController("run-1", run_dir)
+    controller.set_workflow_state("PREPARING", stage="AWAITING_DECISION_CONFIRMATION", busy=False)
+    # Same reasoning as _register_run_pending_failure_decision: tool_stage
+    # is already REPORTING while paused mid-render_report.
+    controller.set_stage("REPORTING", orchestration.STAGE_TOOLS["REPORTING"])
+    controller.set_pending_decision(
+        {
+            "tool_name": "render_report",
+            "context": {},
+            "verdicts": {
+                "completion_action": {
+                    "answer": None,
+                    "suggestion": "FINALIZE_RESULTS",
+                    "confidence": 0.69,
+                    "probabilities": {"FINALIZE_RESULTS": 0.69, "NOT_READY": 0.31},
+                    "route": "ESCALATE",
+                }
+            },
+            "escalation_seq": 1,
+        }
+    )
+    orchestration._ACTIVE_RUNS["run-1"] = {"controller": controller}
+    return controller
+
+
+def test_failure_decision_renders_inline_on_execution_not_analysis(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_failure_decision(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    assert not at.exception
+    assert _has_label(at, "radio", "Your choice")
+    assert any(b.label == "Confirm decision" for b in at.button)
+
+    at = _navigate(at, "analysis")
+    assert not at.exception
+    assert not _has_label(at, "radio", "Your choice")
+    assert not any(b.label == "Confirm decision" for b in at.button)
+
+
+def test_completion_decision_renders_inline_on_execution_not_analysis(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_completion_decision(tmp_path)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    assert not at.exception
+    assert _has_label(at, "radio", "Your choice")
+    assert any(b.label == "Confirm decision" for b in at.button)
+
+    at = _navigate(at, "analysis")
+    assert not at.exception
+    assert not _has_label(at, "radio", "Your choice")
+    assert not any(b.label == "Confirm decision" for b in at.button)
+
+
+def test_confirming_completion_decision_auto_navigates_to_results(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_completion_decision(tmp_path)
+    monkeypatch.setattr(
+        orchestration,
+        "resume_pending_decision",
+        lambda run_id, choice: {"run_id": run_id, "workflow_state": "COMPLETED", "stage": "COMPLETED"},
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("FINALIZE_RESULTS").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()
+    at = _settle(at, lambda a: a.title[0].value == "Results")
+
+    assert not at.exception
+    assert at.title[0].value == "Results"
+
+
+def test_confirming_failure_decision_does_not_auto_navigate(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_failure_decision(tmp_path)
+    monkeypatch.setattr(
+        orchestration,
+        "resume_pending_decision",
+        lambda run_id, choice: {"run_id": run_id, "workflow_state": "AWAITING_DECISION_CONFIRMATION", "stage": "AWAITING_DECISION_CONFIRMATION"},
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("REPORT_FAILURE").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()
+    time.sleep(0.1)
+    at.run()
+
+    assert not at.exception
+    assert at.title[0].value == "Execution"
+
+
+def test_busy_indicator_shown_only_while_worker_busy(monkeypatch, tmp_path, ui_script_path):
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_run_pending_completion_decision(tmp_path)
+    release = threading.Event()
+
+    def slow_resume(run_id: str, choice: str) -> dict:
+        release.wait(timeout=2)
+        return {"run_id": run_id, "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+
+    monkeypatch.setattr(orchestration, "resume_pending_decision", slow_resume)
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _start_into_fixture(at, monkeypatch, controller)
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: _has_label(a, "radio", "Your choice"))
+
+    assert not any("Agent working" in m.value for m in at.markdown)
+
+    next(r for r in at.radio if r.label == "Your choice").set_value("FINALIZE_RESULTS").run()
+    next(b for b in at.button if b.label == "Confirm decision").click().run()  # worker_busy=True now
+
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "Agent working" in markdown_text
+    assert "Finalizing the report" in markdown_text
+
+    release.set()
+    at = _settle(at, lambda a: not any("Agent working" in m.value for m in a.markdown))
+    assert not any("Agent working" in m.value for m in at.markdown)
+
+
 def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_path, ui_script_path):
     """Plan C6-8's execution summary format: "5/5 run · 4 passed · 1
     failed · 1.0s" -- was "{passed}/{total} completed · {duration}s"."""
@@ -1242,6 +1793,69 @@ def test_execution_test_run_summary_matches_the_mock_wording(monkeypatch, tmp_pa
 
     markdown_text = " ".join(m.value for m in at.markdown)
     assert "5/5 run · 4 passed · 1 failed · 0.4s" in markdown_text
+
+
+def test_execution_test_run_and_log_cards_share_a_fixed_scrollable_height(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 live-check round: "Test run" and "Execution log" must share
+    the same fixed height (the log scrolling inside it), so one column
+    doesn't tower over the other."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "execution")
+    at = _settle(at, lambda a: any("aae-table" in m.value for m in a.markdown))
+
+    height_style = f"height:{ui._EXECUTION_CARD_BODY_HEIGHT_PX}px;overflow-y:auto;"
+    markdown_text = " ".join(m.value for m in at.markdown)
+    html_text = " ".join(h.value for h in at.html)
+    assert height_style in markdown_text  # Test run card (still st.markdown)
+    assert height_style in html_text  # Execution log card (st.html, blank-line safe)
+    assert '<pre class="aae-code aae-code--text"' in html_text
+
+
+def test_results_downloads_render_before_the_kpi_row(monkeypatch, tmp_path, ui_script_path):
+    """polish-2 group B5: the download buttons move to directly under the
+    title/banners, right-aligned -- no longer at the very bottom of the
+    page. Block.__iter__ yields every node (blocks and leaf elements, both
+    types mixed) in real render/DOM order, so comparing index positions
+    across the two different element types (button vs markdown) proves
+    actual page order, not just that both exist somewhere."""
+    monkeypatch.setenv("AITE_ARTIFACT_ROOT", str(tmp_path))
+    controller = _register_completed_run(tmp_path)
+    monkeypatch.setattr(
+        orchestration, "run_initial_pass", lambda: {"run_id": "run-1", "workflow_state": "COMPLETED", "stage": "COMPLETED"}
+    )
+
+    at = _app(ui_script_path)
+    at.run()
+    at = _navigate(at, "analysis")
+    next(b for b in at.button if b.label == "Start analysis").click().run()
+    at = _navigate(at, "results")
+    at = _settle(at, lambda a: any("Agent workflow" in m.value for m in a.markdown))
+
+    nodes = list(at.main)
+
+    def _text_of(node) -> str:
+        value = getattr(node, "value", "")
+        return value if isinstance(value, str) else ""
+
+    download_index = next(
+        i for i, n in enumerate(nodes) if getattr(n, "label", None) == "Download report (.md)"
+    )
+    # The rendered tag, not the bare class name -- the injected <style>
+    # block (very top of the page, every rerun) legitimately contains the
+    # literal CSS selector ".aae-kpi-row {", which a bare substring match
+    # would also match, giving a false near-zero index.
+    kpi_index = next(i for i, n in enumerate(nodes) if '<div class="aae-kpi-row">' in _text_of(n))
+    test_results_card_index = next(i for i, n in enumerate(nodes) if "Test results" in _text_of(n))
+    assert download_index < kpi_index < test_results_card_index
 
 
 def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_script_path):
@@ -1268,11 +1882,16 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
     assert "Payment verification: FAILED" in markdown_text
     assert "aae-banner--verification-fail" in markdown_text
 
-    # KPI tiles (ui_components.kpi_row()) -- never previously tested.
-    assert "aae-kpi-row" in markdown_text
-    assert "Total tests" in markdown_text and ">5<" in markdown_text
-    assert "aae-kpi-value--passed" in markdown_text
-    assert "aae-kpi-value--failed" in markdown_text
+    # KPI tiles (ui_components.kpi_row()) -- rendered via st.html(), not
+    # st.markdown(): the .aae-kpi-value CSS rule's own !important would
+    # otherwise beat the inline font-size style inside stMarkdownContainer
+    # (polish-2 live-check round).
+    html_text = " ".join(h.value for h in at.html)
+    assert "aae-kpi-row" in html_text
+    assert "Total tests" in html_text and ">5<" in html_text
+    assert "aae-kpi-value--passed" in html_text
+    assert "aae-kpi-value--failed" in html_text
+    assert 'style="font-size:30px;font-weight:700;line-height:1.1"' in html_text
 
     assert "T01" in markdown_text and "T05" in markdown_text
     assert "1 ledger entry" in markdown_text  # T04 Expected
@@ -1284,6 +1903,11 @@ def test_results_page_shows_banners_kpis_and_t04_row(monkeypatch, tmp_path, ui_s
     assert "BR06: Re-delivery" in markdown_text
     assert "Developer fix. The agent reports defects; it does not change code." in markdown_text
     assert "root cause" not in markdown_text.lower()
+
+    # polish-2 group F16: verdict banners carry their sub-lines now (were
+    # sub=None) -- matches 04_results.png's static copy under each banner.
+    assert "Every stage ran and every decision is on record." in markdown_text
+    assert "BR06 is violated — a real defect for the developer." in markdown_text
 
 
 def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path, ui_script_path):
@@ -1298,12 +1922,14 @@ def test_results_page_decider_trace_spans_every_checkpoint(monkeypatch, tmp_path
     at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
-    at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
+    at = _settle(at, lambda a: any("Coverage v1" in m.value for m in a.markdown))
 
+    # polish-2 group D11: friendly checkpoint labels (Coverage v1/Failure/
+    # Completion), not the raw decisions.json enum strings.
     markdown_text = " ".join(m.value for m in at.markdown)
-    assert "COVERAGE" in markdown_text and "ACCEPT_COVERAGE" in markdown_text
-    assert "FAILURE" in markdown_text and "REPORT_FAILURE" in markdown_text
-    assert "COMPLETION" in markdown_text and "FINALIZE_RESULTS" in markdown_text
+    assert "Coverage v1" in markdown_text and "ACCEPT_COVERAGE" in markdown_text
+    assert "Failure" in markdown_text and "REPORT_FAILURE" in markdown_text
+    assert "Completion" in markdown_text and "FINALIZE_RESULTS" in markdown_text
 
 
 def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypatch, tmp_path, ui_script_path):
@@ -1326,12 +1952,15 @@ def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypa
     at = _navigate(at, "analysis")
     next(b for b in at.button if b.label == "Start analysis").click().run()
     at = _navigate(at, "results")
-    at = _settle(at, lambda a: any("COVERAGE" in m.value for m in a.markdown))
+    at = _settle(at, lambda a: any("Coverage v1" in m.value for m in a.markdown))
     ui_markdown_text = " ".join(m.value for m in at.markdown)
 
     decisions = json.loads((controller.run_dir / "decisions.json").read_text())
     decider_cfg = json.loads((Path(__file__).resolve().parents[2] / "config" / "decider.json").read_text())
-    expected_rows = decision_trace.build_decision_trace(decisions, decider_cfg)
+    # polish-2 group D11: label the rows the same way ui.py/reporting.py
+    # now do internally, so this cross-surface check compares what each
+    # surface actually renders (friendly labels), not the raw checkpoint.
+    expected_rows = decision_trace.label_decision_trace(decision_trace.build_decision_trace(decisions, decider_cfg))
     assert len(expected_rows) >= 3  # COVERAGE, FAILURE, COMPLETION -- the pairing collapsed nothing unexpected
 
     report_text = reporting.render_report(controller)["report_text"]
@@ -1340,8 +1969,10 @@ def test_results_page_decision_trace_matches_report_md_for_the_same_run(monkeypa
         assert f"{row['icon']} {row['decision_text']}" in ui_markdown_text or row["decision_text"] in ui_markdown_text
         assert f"{row['icon']} {row['decision_text']}" in report_text
         if row["confidence"] is not None:
-            assert str(row["confidence"]) in ui_markdown_text
-            assert f"{row['confidence']} vs {row['threshold']}" in report_text
+            # polish-2 group D12: confidence renders to 2 decimals on both
+            # surfaces now (was a bare, unformatted float).
+            assert f"{row['confidence']:.2f}" in ui_markdown_text
+            assert f"{row['confidence']:.2f} vs {row['threshold']:.2f}" in report_text
 
 
 def test_results_page_evidence_tabs_and_downloads(monkeypatch, tmp_path, ui_script_path):

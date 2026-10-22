@@ -57,9 +57,13 @@ PILL_VARIANTS: dict[str, tuple[str, str]] = {
     # ones, or pill() raises and takes the whole page down.
     "error": ("#FFF1D6", "#7A4D00"),  # reuses the "waiting" amber -- distinct from a plain assertion FAIL
     "skipped": ("#F0F3F7", "#3A4757"),  # neutral grey, same tone as a table header
+    # polish-2 group C9: a scenario added to the rule-match inbox by a
+    # remediation round, re-using "added-remediation"'s solid teal.
+    "new-in-version": ("#0D9488", "#FFFFFF"),
 }
 
-_CARD_TONES = {"default", "gap", "decider", "failure"}
+_CARD_TONES = {"default", "gap", "decider", "failure", "teal-accent"}
+_TABLE_HEADER_VARIANTS = {"default", "teal"}
 _PROGRESS_STATES = {"done", "current", "future"}
 _KPI_TONES = {"default", "passed", "failed"}
 _BANNER_VARIANTS = {"workflow-ok", "verification-fail", "action-needed"}
@@ -111,6 +115,8 @@ def table(
     *,
     row_classes: list[str] | None = None,
     col_widths: list[str | None] | None = None,
+    fixed_layout: bool = False,
+    header_variant: str = "default",
 ) -> str:
     """headers are leaf/plain text (escaped internally, since they're
     always short literal column titles). Each row cell is PRE-BUILT HTML
@@ -124,12 +130,25 @@ def table(
     table that shares .aae-table (tables differ in which column, if any,
     needs a fixed width -- there's no reliable way to target "the ID
     column" generically across tables via CSS alone, since column meaning
-    and position both vary table to table)."""
+    and position both vary table to table).
+
+    fixed_layout (polish-2 group D13): opt-in table-layout: fixed + wrapped
+    cell text (the .aae-table--fixed modifier class), for a table sitting
+    in a narrow card where the default table-layout: auto (every other
+    table's default -- sizes to content) would overflow instead of
+    wrapping.
+
+    header_variant (polish-2 group F15): "teal" tints just this table's
+    header row (#E6F2F1/#0B5F57, Overview's Business Rules table) via the
+    .aae-table--teal-header modifier class -- opt-in, since most tables
+    keep the neutral grey header."""
     if row_classes is not None and len(row_classes) != len(rows):
         raise ValueError(f"row_classes length {len(row_classes)} != rows length {len(rows)}")
     classes = row_classes if row_classes is not None else [""] * len(rows)
     if col_widths is not None and len(col_widths) != len(headers):
         raise ValueError(f"col_widths length {len(col_widths)} != headers length {len(headers)}")
+    if header_variant not in _TABLE_HEADER_VARIANTS:
+        raise ValueError(f"unknown table header_variant {header_variant!r}")
 
     colgroup = ""
     if col_widths is not None:
@@ -142,8 +161,14 @@ def table(
         class_attr = f' class="{html.escape(row_class)}"' if row_class else ""
         tds = "".join(f"<td>{cell}</td>" for cell in row)
         body_rows.append(f"<tr{class_attr}>{tds}</tr>")
+    table_classes = ["aae-table"]
+    if fixed_layout:
+        table_classes.append("aae-table--fixed")
+    if header_variant == "teal":
+        table_classes.append("aae-table--teal-header")
+    table_class = " ".join(table_classes)
     return (
-        '<table class="aae-table">'
+        f'<table class="{table_class}">'
         f"{colgroup}"
         f"<thead><tr>{thead}</tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody>"
@@ -162,7 +187,11 @@ def kpi_row(tiles: list[dict]) -> str:
         cells.append(
             '<div class="aae-kpi-tile">'
             f'<p class="aae-kpi-label">{escape(tile["label"])}</p>'
-            f'<p class="aae-kpi-value{value_class}">{escape(tile["value"])}</p>'
+            # Inline style, not just the aae-kpi-value CSS class: raised
+            # selector specificity alone still lost to Streamlit's cascade
+            # live (confirmed by the user) -- inline wins unconditionally.
+            f'<p class="aae-kpi-value{value_class}" style="font-size:30px;font-weight:700;line-height:1.1">'
+            f'{escape(tile["value"])}</p>'
             f'<p class="aae-kpi-sub">{escape(tile.get("sub", ""))}</p>'
             "</div>"
         )
@@ -206,40 +235,68 @@ def conf_bar(confidence: float, threshold: float, *, width_px: int = 90) -> str:
         f'<span class="aae-conf-fill" style="width:{fill_pct:g}%;background:{fill_color};"></span>'
         f'<span class="aae-conf-tau" style="left:{tau_pct:g}%;"></span>'
         f"</span>"
-        f'<span class="aae-conf-value">{confidence:g}</span>'
+        f'<span class="aae-conf-value">{confidence:.2f}</span>'
         f"</span>"
     )
 
 
 def progress(steps: list[dict]) -> str:
-    """Each step's label/sub are leaf/plain text, escaped internally."""
-    dots = []
+    """Each step's label/sub are leaf/plain text, escaped internally.
+
+    One flat flex row: a step element, then -- between steps only -- a
+    separate arrow element sitting in the gap. polish-2 live-check round:
+    the previous connector was an absolutely-positioned line starting at
+    left:50% of ITS OWN step and spanning 100% of that step's width, which
+    put it (and the arrow glyph drawn on top of it) overlapping the NEXT
+    step's circle rather than sitting in the gap between the two. A plain
+    flex sibling can never overlap another flex sibling, so this can't
+    recur. Inline style for the arrow's color, same reasoning as the
+    KPI/code-block fixes -- the arrow is rendered via st.html(), never
+    st.markdown() (see ui.py's Progress card call site)."""
+    parts = []
     total = len(steps)
     for index, step in enumerate(steps):
         state = step["state"]
         if state not in _PROGRESS_STATES:
             raise ValueError(f"unknown progress state {state!r}")
-        connector = ""
-        if index < total - 1:
-            filled = " aae-progress-connector--filled" if state in ("done", "current") else ""
-            connector = f'<span class="aae-progress-connector{filled}"></span>'
         sub_html = f'<p class="aae-progress-sub">{escape(step.get("sub", ""))}</p>' if step.get("sub") else ""
-        dots.append(
+        parts.append(
             '<span class="aae-progress-step">'
             f'<span class="aae-progress-dot aae-progress-dot--{state}">{index + 1}</span>'
             f'<p class="aae-progress-label">{escape(step["label"])}</p>'
             f"{sub_html}"
-            f"{connector}"
             "</span>"
         )
-    return f'<div class="aae-progress">{"".join(dots)}</div>'
+        if index < total - 1:
+            arrow_color = "#0D9488" if state in ("done", "current") else "#9CA7B4"
+            parts.append(f'<span class="aae-progress-arrow" style="color:{arrow_color};">→</span>')
+    return f'<div class="aae-progress">{"".join(parts)}</div>'
+
+
+def busy_indicator(label: str) -> str:
+    """Leaf helper: label is plain text, escaped internally. A small
+    pulsing dot + text -- rendered at the top of every page only while
+    state.worker_busy is True (see ui.py's per-page call)."""
+    return f'<div class="aae-busy"><span class="aae-busy-dot"></span>{escape(label)}</div>'
 
 
 def code_block(text_html: str, *, language: str = "text") -> str:
     """text_html is pre-built HTML (already escaped, and already
     keyword/status-highlighted by gherkin_highlight()/log_highlight() if
-    applicable) -- NOT escaped again here."""
-    return f'<pre class="aae-code aae-code--{language}">{text_html}</pre>'
+    applicable) -- NOT escaped again here.
+
+    Inline style, not just the aae-code CSS class: raised selector
+    specificity alone still lost to Streamlit's cascade live (confirmed by
+    the user) -- inline wins unconditionally. Callers in ui.py render this
+    via st.html(), never st.markdown() -- see those call sites' comments
+    for why (a blank line inside the content would otherwise end
+    Markdown's raw-HTML-block parsing early)."""
+    style = (
+        "background:#0F1B2D;color:#D7E0EA;border-radius:7px;padding:12px 14px;"
+        "font-family:'Source Code Pro',monospace;font-size:11.5px;line-height:1.6;"
+        "white-space:pre-wrap;margin:0"
+    )
+    return f'<pre class="aae-code aae-code--{language}" style="{style}">{text_html}</pre>'
 
 
 _GHERKIN_KEYWORD_RE = re.compile(r"^(\s*)(Scenario|Given|When|Then|And)\b")
@@ -259,7 +316,8 @@ def gherkin_highlight(raw_text: str) -> str:
         if match:
             indent, keyword = match.group(1), match.group(2)
             css_class = "aae-kw-scenario" if keyword == "Scenario" else "aae-kw-step"
-            line = f'{indent}<span class="{css_class}">{keyword}</span>' + line[match.end() :]
+            color = "#5EEAD4" if keyword == "Scenario" else "#93C5FD"
+            line = f'{indent}<span class="{css_class}" style="color:{color}">{keyword}</span>' + line[match.end() :]
         lines.append(line)
     return "\n".join(lines)
 
@@ -275,7 +333,8 @@ def log_highlight(raw_text: str) -> str:
     def _span(match: re.Match) -> str:
         word = match.group(1)
         css_class = "aae-log-pass" if word == "PASSED" else "aae-log-fail"
-        return f'<span class="{css_class}">{word}</span>'
+        color = "#86EFAC" if word == "PASSED" else "#FCA5A5"
+        return f'<span class="{css_class}" style="color:{color}">{word}</span>'
 
     return _LOG_STATUS_RE.sub(_span, escaped)
 
@@ -298,6 +357,25 @@ def small_caption(text: str) -> str:
     under-card caption (distinct from the page subtitle, which stays a
     plain st.caption call)."""
     return f'<p class="aae-caption">{escape(text)}</p>'
+
+
+def checklist(items: list[str]) -> str:
+    """Leaf helper: each item is raw/plain text, escaped internally.
+    Overview's "Key acceptance criteria" -- a teal check bullet per item
+    instead of a plain <ul> (polish-2 group F15)."""
+    rows = "".join(f'<li><span class="aae-checklist-icon">✓</span>{escape(item)}</li>' for item in items)
+    return f'<ul class="aae-checklist">{rows}</ul>'
+
+
+def numbered_steps(items: list[str]) -> str:
+    """Leaf helper: each item is raw/plain text, escaped internally.
+    Overview's "What the agent does" -- a teal numbered circle per item
+    instead of a plain <ol> (polish-2 group F15)."""
+    rows = "".join(
+        f'<li><span class="aae-numbered-steps-icon">{index}</span>{escape(item)}</li>'
+        for index, item in enumerate(items, start=1)
+    )
+    return f'<ol class="aae-numbered-steps">{rows}</ol>'
 
 
 def _pill_css() -> str:
@@ -479,11 +557,20 @@ AAE_CSS = f"""
 .aae-card--decider {{ background-color: #F8F5FF; border-color: #C9B8F0; }}
 .aae-card--decider .aae-card-heading {{ color: #4B2A9B !important; }}
 .aae-card--failure {{ border-color: #F1B8B2; }}
+/* polish-2 group F15: a teal left-accent heading, not a background tint
+   (background stays white -- "accents, not heavy fills"). */
+.aae-card--teal-accent {{ border-left: 4px solid {_CONF_TEAL}; }}
+.aae-card--teal-accent .aae-card-heading {{ color: #0B5F57 !important; }}
 .aae-rule-quote {{
     background-color: #FFF7E0;
     color: #5A3E00;
     border-radius: 6px;
     padding: 7px 9px;
+    /* polish-2 group F16: a bare <div>, not a <p> -- the global 13px/1.45
+       body rule only targets p/li/etc., so this fell back to Streamlit's
+       markdown default (larger than every other body-text element). */
+    font-size: 13px;
+    line-height: 1.45;
 }}
 
 /* -- Overview labels -- */
@@ -497,6 +584,40 @@ AAE_CSS = f"""
 .aae-label-impact {{ color: #B54708; }}
 .aae-label-mitigation {{ color: #0B766C; }}
 .aae-label-body {{ margin: 2px 0 10px 0 !important; }}
+
+/* polish-2 group F15: Overview's "Key acceptance criteria"/"What the
+   agent does" lists, with a teal check/numbered-circle icon per item
+   instead of a plain browser bullet/number. */
+.aae-checklist, .aae-numbered-steps {{
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}}
+.aae-checklist li, .aae-numbered-steps li {{
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 6px 0 !important;
+    padding: 0 !important;
+}}
+.aae-checklist-icon {{
+    color: {_CONF_TEAL};
+    font-weight: 700;
+    flex: 0 0 auto;
+}}
+.aae-numbered-steps-icon {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: {_CONF_TEAL};
+    color: #FFFFFF;
+    font-size: 10.5px;
+    font-weight: 700;
+    flex: 0 0 auto;
+}}
 
 /* -- Table -- raised specificity ([data-testid="stMarkdownContainer"]
    .aae-table ...) plus !important on size/spacing: Streamlit's own
@@ -530,6 +651,25 @@ AAE_CSS = f"""
 .aae-row--fail {{ background-color: #FFF1F0; font-weight: 700; }}
 .aae-row--added {{ background-color: #EAF6F4; }}
 .aae-row--not-reached {{ color: #9CA7B4; }}
+/* polish-2 group D13: the decision-trace table, in a now-narrower card
+   (~2:3 split with the Failure card), wraps its cell text instead of
+   overflowing the card -- table-layout: auto (every other table's
+   default) sizes to content instead, which would push this one wider
+   than its card. */
+.block-container [data-testid="stMarkdownContainer"] .aae-table--fixed {{
+    table-layout: fixed !important;
+}}
+.block-container [data-testid="stMarkdownContainer"] .aae-table--fixed td,
+.block-container [data-testid="stMarkdownContainer"] .aae-table--fixed th {{
+    overflow-wrap: break-word;
+    word-break: break-word;
+}}
+/* polish-2 group F15: Overview's Business Rules table header, tinted
+   teal instead of the neutral grey every other table keeps. */
+.block-container [data-testid="stMarkdownContainer"] .aae-table--teal-header th {{
+    background-color: #E6F2F1 !important;
+    color: #0B5F57 !important;
+}}
 
 /* -- Pills (generated from PILL_VARIANTS) -- */
 .aae-pill {{
@@ -576,22 +716,42 @@ AAE_CSS = f"""
     padding: 14px 16px;
 }}
 .aae-kpi-label {{ font-size: 11.5px !important; font-weight: 600 !important; color: #4A5868 !important; margin: 0 !important; }}
-.aae-kpi-value {{ font-size: 26px !important; font-weight: 700 !important; color: #0F1B2D !important; margin: 2px 0 !important; }}
+/* polish-2 live-check round: this rule used to also carry font-size/
+   font-weight with !important (group F16) -- that's the real reason the
+   KPI numbers STILL rendered small after kpi_row() got an inline
+   style="font-size:30px..." (group F16 too): a stylesheet rule's
+   !important beats an inline style with no !important of its own,
+   regardless of specificity, so this rule was quietly cancelling the very
+   fix it sat next to. Font-size/weight are inline-only now (kpi_row()'s
+   <p> tag) and the Results KPI row renders via st.html() (outside
+   stMarkdownContainer, so this selector can't even match it) -- color/
+   margin stay here since kpi_row()'s inline style doesn't set them. */
+.block-container [data-testid="stMarkdownContainer"] .aae-kpi-value {{
+    color: #0F1B2D !important;
+    margin: 2px 0 !important;
+}}
 .aae-kpi-value--passed {{ color: #11602E !important; }}
 .aae-kpi-value--failed {{ color: #B42318 !important; }}
 .aae-kpi-sub {{ font-size: 11.5px !important; color: #5B6878 !important; margin: 0 !important; }}
 
-/* -- Code / log blocks -- */
-.aae-code {{
-    background-color: #0F1B2D;
-    color: #D7E0EA;
-    border-radius: 7px;
-    padding: 12px 14px;
-    font-family: "Source Code Pro", monospace;
-    font-size: 11.5px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    overflow-x: auto;
+/* -- Code / log blocks -- raised specificity ([data-testid=
+   "stMarkdownContainer"] .aae-code ...) plus !important, same technique
+   and same reason as the table fix above: a bare, un-raised .aae-code
+   selector lost to Streamlit's own stMarkdownContainer/p rules (same
+   specificity, their stylesheet loads first but wins in practice),
+   rendering Gherkin/log/JSON as flattened paragraph text on a light
+   background instead of a dark monospace block (confirmed live). -- */
+.block-container [data-testid="stMarkdownContainer"] .aae-code {{
+    background-color: #0F1B2D !important;
+    color: #D7E0EA !important;
+    border-radius: 7px !important;
+    padding: 12px 14px !important;
+    font-family: "Source Code Pro", monospace !important;
+    font-size: 11.5px !important;
+    line-height: 1.6 !important;
+    white-space: pre-wrap !important;
+    overflow-x: auto !important;
+    display: block !important;
 }}
 .aae-log-pass {{ color: #86EFAC; }}
 .aae-log-fail {{ color: #FCA5A5; }}
@@ -647,6 +807,37 @@ AAE_CSS = f"""
     color: #5B7C78 !important;
     border: 1px dashed #9CC9C3 !important;
 }}
+/* -- Action banner buttons (polish-2 group B4): the cross-page "Go to X"
+   button and the same-page "Jump to it" anchor both read as solid teal,
+   the same brand accent as every other live/enabled control. -- */
+.st-key-jump_to_action_page button {{
+    background-color: {_CONF_TEAL} !important;
+    color: #FFFFFF !important;
+    border-color: {_CONF_TEAL} !important;
+}}
+/* -- Results download buttons (polish-2 group B5) -- */
+.st-key-download_report_btn button,
+.st-key-download_evidence_btn button {{
+    background-color: {_CONF_TEAL} !important;
+    color: #FFFFFF !important;
+    border-color: {_CONF_TEAL} !important;
+}}
+.st-key-download_report_btn button:disabled,
+.st-key-download_evidence_btn button:disabled {{
+    background-color: #E6F2F1 !important;
+    color: #5B7C78 !important;
+    border: 1px dashed #9CC9C3 !important;
+}}
+.aae-btn-teal {{
+    display: inline-block;
+    background-color: {_CONF_TEAL};
+    color: #FFFFFF !important;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 7px;
+    text-decoration: none !important;
+}}
 
 /* -- Confidence bar -- */
 .aae-conf-bar {{ display: inline-flex; align-items: center; gap: 8px; }}
@@ -673,9 +864,20 @@ AAE_CSS = f"""
 }}
 .aae-conf-value {{ font-size: 11.5px; color: #1E2A38; }}
 
-/* -- Progress tracker -- */
+/* -- Progress tracker -- polish-2 live-check round: the arrow is now a
+   plain flex sibling sitting in the gap between two steps (never an
+   absolutely-positioned element drawn on top of a circle -- see
+   progress()'s docstring). -- */
 .aae-progress {{ display: flex; align-items: flex-start; }}
-.aae-progress-step {{ display: flex; flex-direction: column; align-items: center; flex: 1; position: relative; }}
+.aae-progress-step {{ display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0; }}
+.aae-progress-arrow {{
+    flex: 0 0 20px;
+    display: flex;
+    justify-content: center;
+    margin-top: 4px;
+    font-size: 15px !important;
+    line-height: 1 !important;
+}}
 .aae-progress-dot {{
     width: 24px;
     height: 24px;
@@ -691,16 +893,70 @@ AAE_CSS = f"""
 .aae-progress-dot--future {{ background-color: #FFFFFF; color: #9CA7B4; border: 2px solid #C7D0DB; }}
 .aae-progress-label {{ font-size: 12px !important; font-weight: 700 !important; margin: 4px 0 0 0 !important; }}
 .aae-progress-sub {{ font-size: 11.5px !important; color: #5B6878 !important; margin: 0 !important; }}
-.aae-progress-connector {{
-    position: absolute;
-    top: 12px;
-    left: 50%;
-    width: 100%;
-    height: 2px;
-    background-color: #DDE3EA;
-    z-index: -1;
+
+/* -- Rule-match inbox header (polish-2 live-check round): one line,
+   title left, counter right-aligned. -- */
+.aae-rule-match-header {{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
 }}
-.aae-progress-connector--filled {{ background-color: #2DD4BF; }}
+.aae-rule-match-header-count {{ font-size: 12px; color: #5B6878; white-space: nowrap; }}
+
+/* -- Rule-match inbox answered rows (polish-2 group C8/C9) -- a static
+   row for an already-answered item, same visual column rhythm as the
+   active form's st.columns([2, 2, 3, 3]). -- */
+.aae-rule-match-row {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 4px;
+    font-size: 13px;
+    border-bottom: 1px solid #EEF1F5;
+}}
+.aae-rule-match-cell {{ flex: 2 1 0; }}
+.aae-rule-match-answer {{ flex: 1 1 0; font-weight: 600; text-align: right; }}
+.aae-row--new-in-version {{ background-color: #E6F2F1; border-radius: 6px; }}
+.aae-row--just-answered {{
+    animation: aae-row-flash 1.5s ease-out forwards;
+}}
+@keyframes aae-row-flash {{
+    0% {{ background-color: #CFEFE9; }}
+    100% {{ background-color: transparent; }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+    .aae-row--just-answered {{ animation: none; background-color: #CFEFE9; }}
+}}
+
+/* -- Busy indicator (polish-2 group A3): shown at the top of every page
+   only while state.worker_busy is True. Pure CSS pulse -- no spinner
+   image/library -- and respects prefers-reduced-motion by freezing the
+   animation rather than hiding the indicator (it's still informative
+   without the motion). */
+.aae-busy {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    color: #0B5F57;
+    margin: 0 0 12px 0;
+}}
+.aae-busy-dot {{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: {_CONF_TEAL};
+    animation: aae-pulse 1.1s ease-in-out infinite;
+}}
+@keyframes aae-pulse {{
+    0%, 100% {{ opacity: 1; transform: scale(1); }}
+    50% {{ opacity: 0.35; transform: scale(0.7); }}
+}}
+@media (prefers-reduced-motion: reduce) {{
+    .aae-busy-dot {{ animation: none; }}
+}}
 
 /* -- Main content: fill the page -- */
 .block-container {{
@@ -755,7 +1011,10 @@ def decision_trace_table(rows: list[dict]) -> str:
     table_rows = []
     row_classes = []
     for row in rows:
-        checkpoint_cell = escape(row["checkpoint"] or "—")
+        # label (polish-2 group D11, set by decision_trace.label_decision_
+        # trace): the friendly checkpoint name -- falls back to the raw
+        # checkpoint string for a caller that didn't label its rows.
+        checkpoint_cell = escape(row.get("label") or row["checkpoint"] or "—")
         decision_cell = escape(row["decision_text"] or "—")
         if row["confidence"] is not None and row["threshold"] is not None:
             confidence_cell = conf_bar(row["confidence"], row["threshold"])
@@ -768,10 +1027,28 @@ def decision_trace_table(rows: list[dict]) -> str:
         else:
             variant = OUTCOME_PILL_VARIANT.get(outcome)
             outcome_cell = pill(outcome, variant) if variant else escape(outcome)
+        # detail (polish-2 group D12): the override/escalated-by-other-
+        # question explanation -- a title= tooltip on the Outcome cell,
+        # never glued onto the Decision cell as a long sentence.
+        detail = row.get("detail")
+        if detail:
+            # Attribute-value context -- html.escape()'s quote=True default,
+            # not this module's escape() (quote=False), same convention as
+            # labeled_section()'s label_class.
+            outcome_cell = f'<span title="{html.escape(detail)}">{outcome_cell}</span>'
 
         table_rows.append([checkpoint_cell, decision_cell, confidence_cell, outcome_cell])
         row_classes.append("aae-row--not-reached" if outcome == "not reached" else "")
-    return table(headers, table_rows, row_classes=row_classes)
+    # polish-2 group D13: fixed_layout + explicit col_widths so this table
+    # never overflows its card at the new, narrower ~2:5 width (the
+    # Results page's decider_col) -- wrapped text instead.
+    return table(
+        headers,
+        table_rows,
+        row_classes=row_classes,
+        col_widths=["86px", None, "100px", "100px"],
+        fixed_layout=True,
+    )
 
 
 def widget_card_container(name: str):

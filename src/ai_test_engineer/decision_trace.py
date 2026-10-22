@@ -172,12 +172,19 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
     """
     rows: list[dict] = []
     pending: dict[str, dict] = {}
+    resolved_checkpoints: set[str] = set()
 
     def _emit(decider_record: dict | None, human_record: dict | None) -> None:
         base_record = human_record or decider_record
         primary = _primary_question(decider_record) if decider_record else None
         decision_text = decider_decision_value(base_record)
         override = False
+        # detail (polish-2 group D12): the override/escalated-by-other-
+        # question explanation, kept OUT of decision_text so the Decision
+        # column stays short (action + "(human)") -- callers render this
+        # as the Outcome pill's tooltip/sub-text (UI) or a parenthetical
+        # next to Outcome (report.md, which has no tooltips).
+        detail = None
         if (
             decider_record is not None
             and human_record is not None
@@ -188,7 +195,7 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
             human_choice = human_record.get("selected_action")
             if suggestion is not None and human_choice is not None and suggestion != human_choice:
                 override = True
-                decision_text = f"{decision_text}, override of Decider's {suggestion!r} suggestion"
+                detail = f"override of Decider's {suggestion!r} suggestion"
         # A DECIDER record whose own PRIMARY question resolved AUTO (a real
         # answer, not "Awaiting human") yet whose overall route is still
         # ESCALATED: some OTHER question in the batch (a grounding/ambiguity
@@ -202,7 +209,7 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
             and primary.get("answer") is not None
             and base_record.get("route") == "ESCALATED"
         ):
-            decision_text = f"{decision_text} (escalated by rule-match/ambiguity questions)"
+            detail = "escalated by rule-match/ambiguity questions"
         # Genuinely still paused on this exact question: a decider_record
         # with no pairing human answer, whose own primary choice question
         # is itself unanswered (as opposed to the escalated-by-other-
@@ -218,6 +225,7 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
                 "checkpoint": base_record.get("checkpoint"),
                 "icon": decision_icon(base_record),
                 "decision_text": decision_text,
+                "detail": detail,
                 "confidence": round4(primary_choice_confidence(decider_record)) if decider_record else None,
                 "threshold": round4(_threshold_for(primary, decider_cfg)) if decider_record else None,
                 "route": base_record.get("route"),
@@ -236,11 +244,22 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
             _emit(decider_record, record)
             if record.get("decision_status") != "REJECTED":
                 pending.pop(checkpoint, None)
+                resolved_checkpoints.add(checkpoint)
             continue
         if source == "DECIDER" and route == "ESCALATED":
             pending[checkpoint] = record
             continue
+        if source == "REUSED" and route == "ESCALATED" and checkpoint in resolved_checkpoints:
+            # The controller replayed a cached decision for a retried tool
+            # call after this checkpoint's own DECIDER+HUMAN_ESCALATION
+            # pair already produced its one row above (decision_record_
+            # reused() re-evaluates the gate fresh, which still reports
+            # ESCALATE/null answers even though a human already resolved
+            # this checkpoint via a prior toolUseId) -- not a new
+            # occurrence, so no second row.
+            continue
         _emit(record, None)  # AUTO or REUSED -- standalone resolved row
+        resolved_checkpoints.add(checkpoint)
 
     for decider_record in pending.values():
         _emit(decider_record, None)  # genuinely still awaiting human
@@ -251,6 +270,44 @@ def build_decision_trace(decisions: list[dict], decider_cfg: dict) -> list[dict]
 # checkpoints._checkpoint_name's tool->checkpoint mapping, in the fixed
 # pipeline order the Analysis page's live trace shows them.
 ALL_CHECKPOINTS = ["AMBIGUITY+STRATEGY", "COVERAGE", "FAILURE", "COMPLETION"]
+
+
+# Friendly checkpoint names (polish-2 group D11) -- display only, never
+# used for matching/comparison (that stays "checkpoint", the real enum
+# string from decisions.json).
+_FRIENDLY_BASE = {
+    "AMBIGUITY+STRATEGY": "Generate",
+    "COVERAGE": "Coverage",
+    "FAILURE": "Failure",
+    "COMPLETION": "Completion",
+}
+
+
+def label_decision_trace(rows: list[dict]) -> list[dict]:
+    """Adds a "label" field (never mutates the input rows) -- the
+    friendly checkpoint name from _FRIENDLY_BASE, with a "v{occurrence}"
+    suffix for a checkpoint that appears more than once in the same rows
+    list (COVERAGE can escalate twice: once pre-remediation, once after).
+    Anything not in _FRIENDLY_BASE (ui.py's synthetic "Approval" row,
+    or any future checkpoint) passes through with its own name as the
+    label. Shared by both renderers (ui.py and reporting.py) so the
+    wording can't drift between them."""
+    occurrence_counts: dict[str, int] = {}
+    labeled = []
+    for row in rows:
+        checkpoint = row["checkpoint"]
+        base = _FRIENDLY_BASE.get(checkpoint, checkpoint)
+        if checkpoint == "COVERAGE":
+            # Always versioned, even for a single occurrence -- COVERAGE
+            # checks a scenario-set version (same "v1"/"v2" terminology
+            # the Scenarios page already uses for scenario sets), not a
+            # one-shot step like the other three checkpoints.
+            occurrence_counts[checkpoint] = occurrence_counts.get(checkpoint, 0) + 1
+            label = f"{base} v{occurrence_counts[checkpoint]}"
+        else:
+            label = base
+        labeled.append({**row, "label": label})
+    return labeled
 
 
 def pad_not_reached_rows(rows: list[dict]) -> list[dict]:
@@ -266,6 +323,7 @@ def pad_not_reached_rows(rows: list[dict]) -> list[dict]:
             "checkpoint": checkpoint,
             "icon": "⬜",
             "decision_text": "not reached",
+            "detail": None,
             "confidence": None,
             "threshold": None,
             "route": None,

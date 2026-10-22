@@ -132,7 +132,8 @@ def test_decision_trace_rows(controller):
 
     assert "COVERAGE" in report["report_text"]
     assert "ACCEPT_COVERAGE" in report["report_text"]
-    assert "0.4242" in report["report_text"]
+    assert "0.42 vs" in report["report_text"]  # polish-2 group D12: 2 decimals, was bare 0.4242
+    assert "0.4242" not in report["report_text"]
     assert "REPORT_FAILURE (human)" in report["report_text"]
 
 
@@ -144,8 +145,46 @@ def test_decision_trace_table_has_outcome_column(controller):
     text = report["report_text"]
 
     assert "| Checkpoint | Decision | Confidence vs τ | Outcome | Route | Source |" in text
-    assert "| COVERAGE | ✅ ACCEPT_COVERAGE | 0.4242 vs 0.75 | Auto | AUTO | DECIDER |" in text
-    assert "| FAILURE | ✅ REPORT_FAILURE (human) | — | Human confirmed | ESCALATED | HUMAN_ESCALATION |" in text
+    # polish-2 group D11/D12: friendly checkpoint label (Coverage v1, was
+    # the raw "COVERAGE") and confidence to 2 decimals (was bare 0.4242).
+    assert "| Coverage v1 | ✅ ACCEPT_COVERAGE | 0.42 vs 0.75 | Auto | AUTO | DECIDER |" in text
+    assert "| Failure | ✅ REPORT_FAILURE (human) | — | Human confirmed | ESCALATED | HUMAN_ESCALATION |" in text
+
+
+def test_decision_trace_override_detail_is_an_outcome_parenthetical_not_a_long_decision_sentence(controller):
+    # polish-2 group D12: report.md has no tooltips, so the override
+    # explanation goes in the Outcome cell as a parenthetical instead --
+    # the Decision cell stays short (action + "(human)").
+    decisions_with_override = [
+        {
+            "checkpoint": "COVERAGE",
+            "decision_source": "DECIDER",
+            "decision_status": "VALIDATED",
+            "route": "ESCALATED",
+            "per_question": [
+                {"question": "coverage_action", "answer": None, "suggestion": "ACCEPT_COVERAGE", "confidence": 0.55, "probabilities": {}}
+            ],
+        },
+        {
+            "checkpoint": "COVERAGE",
+            "decision_source": "HUMAN_ESCALATION",
+            "decision_status": "VALIDATED",
+            "route": "ESCALATED",
+            "selected_action": "REMEDIATE_GAP",
+            "per_question": [],
+        },
+    ]
+    _write(controller, "results.json", RESULTS_DEFECT_ON)
+    _write(controller, "decisions.json", decisions_with_override)
+
+    report = reporting.render_report(controller)
+    text = report["report_text"]
+
+    assert "REMEDIATE_GAP (human)" in text
+    assert "override of Decider's 'ACCEPT_COVERAGE' suggestion" in text
+    decision_cell_end = text.index("REMEDIATE_GAP (human)") + len("REMEDIATE_GAP (human)")
+    row_end = text.index("\n", decision_cell_end)
+    assert "override" not in text[decision_cell_end:row_end].split("|")[0]  # not glued onto Decision
 
 
 def test_approval_block(controller):
@@ -263,7 +302,10 @@ def test_report_decision_trace_equals_build_decision_trace_output_directly(contr
         assert f"{row['icon']} {row['decision_text']}" in report["report_text"]
         assert row["outcome"] in report["report_text"]
         if row["confidence"] is not None:
-            assert f"{row['confidence']} vs {row['threshold']}" in report["report_text"]
+            # polish-2 group D12: report.md renders confidence/threshold to
+            # 2 decimals (the UI's conf_bar does too) -- raw decisions.json
+            # floats (e.g. 0.4242) are rounded for display, not truncated.
+            assert f"{row['confidence']:.2f} vs {row['threshold']:.2f}" in report["report_text"]
 
 
 def test_report_trace_outcome_equals_ui_trace_outcome(controller):
@@ -278,13 +320,18 @@ def test_report_trace_outcome_equals_ui_trace_outcome(controller):
     _write(controller, "decisions.json", DECISIONS)
     decider_cfg = json.loads((reporting.CONFIG_DIR / "decider.json").read_text())
 
-    rows = decision_trace.build_decision_trace(DECISIONS, decider_cfg)
+    # polish-2 group D11: report.md's Checkpoint column now shows the
+    # friendly label (reporting._decision_trace_md calls
+    # label_decision_trace internally) -- label the rows here too so the
+    # row-matching lookup below stays on the same real surface the UI
+    # calls (ui.py's own call sites all label before rendering).
+    rows = decision_trace.label_decision_trace(decision_trace.build_decision_trace(DECISIONS, decider_cfg))
     report_text = reporting.render_report(controller)["report_text"]
     ui_html = ui_components.decision_trace_table(rows)
 
     for row in rows:
-        checkpoint, outcome = row["checkpoint"], row["outcome"]
-        report_row_line = next(line for line in report_text.splitlines() if line.startswith(f"| {checkpoint} |"))
+        label, outcome = row["label"], row["outcome"]
+        report_row_line = next(line for line in report_text.splitlines() if line.startswith(f"| {label} |"))
         assert outcome in report_row_line
         assert outcome in ui_html
 

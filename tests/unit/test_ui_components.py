@@ -103,6 +103,14 @@ def test_card_rejects_unknown_tone():
         uc.card("Heading", "body", tone="not-a-real-tone")
 
 
+def test_card_teal_accent_tone_adds_modifier_class():
+    # polish-2 group F15: Overview's four cards get a teal left-accent
+    # heading (not a full background tint like gap/decider -- "accents,
+    # not heavy fills").
+    result = uc.card("Heading", "body", tone="teal-accent")
+    assert "aae-card--teal-accent" in result
+
+
 # ---------------------------------------------------------------------------
 # table()
 # ---------------------------------------------------------------------------
@@ -156,6 +164,38 @@ def test_table_without_col_widths_has_no_colgroup():
     assert "<colgroup>" not in result
 
 
+def test_table_fixed_layout_adds_modifier_class():
+    # polish-2 group D13: the Results-page decision-trace table needs
+    # table-layout: fixed + wrapped cell text so it never overflows its
+    # (now narrower, ~2:3 split) card -- opt-in per table, not global
+    # (other tables rely on table-layout: auto to size to their content).
+    result = uc.table(["ID"], [["T01"]], fixed_layout=True)
+    assert result.startswith('<table class="aae-table aae-table--fixed">')
+
+
+def test_table_without_fixed_layout_has_no_modifier_class():
+    result = uc.table(["ID"], [["T01"]])
+    assert "aae-table--fixed" not in result
+
+
+def test_table_teal_header_variant_adds_modifier_class():
+    # polish-2 group F15: Overview's Business Rules table gets a teal-
+    # tinted header row (#E6F2F1/#0B5F57) -- opt-in, not a global table()
+    # change (every other table keeps the neutral grey header).
+    result = uc.table(["ID"], [["T01"]], header_variant="teal")
+    assert result.startswith('<table class="aae-table aae-table--teal-header">')
+
+
+def test_table_default_header_variant_has_no_modifier_class():
+    result = uc.table(["ID"], [["T01"]])
+    assert "aae-table--teal-header" not in result
+
+
+def test_table_rejects_unknown_header_variant():
+    with pytest.raises(ValueError):
+        uc.table(["ID"], [["T01"]], header_variant="not-a-real-variant")
+
+
 # ---------------------------------------------------------------------------
 # kpi_row()
 # ---------------------------------------------------------------------------
@@ -172,6 +212,15 @@ def test_kpi_row_renders_each_tile():
     assert "Total tests" in result and "Passed" in result and "Failed" in result
     assert "aae-kpi-value--passed" in result
     assert "aae-kpi-value--failed" in result
+
+
+def test_kpi_row_value_has_inline_style():
+    # polish-2 live-check round: raised CSS specificity alone still lost
+    # to Streamlit's cascade live (confirmed by the user) -- an inline
+    # style= wins regardless, so this is a rendered-element check, not a
+    # CSS-source check.
+    result = uc.kpi_row([{"label": "Total tests", "value": "5", "tone": "default"}])
+    assert 'style="font-size:30px;font-weight:700;line-height:1.1"' in result
 
 
 def test_kpi_row_escapes_tile_text():
@@ -237,9 +286,13 @@ def test_conf_bar_amber_when_below_threshold():
     assert "#F59E0B" in result
 
 
-def test_conf_bar_includes_numeric_value():
+def test_conf_bar_formats_confidence_to_2_decimals():
+    # polish-2 group D12: confidence reads to 2 decimals everywhere
+    # conf_bar is used (the confirm-decision card and the decision-trace
+    # table) -- was bare {:g} (4 decimals straight off decisions.json).
     result = uc.conf_bar(0.6912, 0.75)
-    assert "0.6912" in result
+    assert "0.69" in result
+    assert "0.6912" not in result
 
 
 def test_conf_bar_respects_width_px():
@@ -279,6 +332,39 @@ def test_progress_escapes_label_and_sub():
     assert result.count(ESCAPED_UNSAFE_TEXT) == 2
 
 
+def test_progress_connector_shows_a_visible_arrow_glyph():
+    # polish-2 live-check round: the connector line rendered but had no
+    # visible arrow glyph; the glyph is now its own flex sibling sitting
+    # in the gap between steps -- never absolutely positioned on top of
+    # a circle (the earlier bug: it overlapped the next step's dot).
+    steps = [{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}]
+    result = uc.progress(steps)
+    assert "→" in result
+    assert '<span class="aae-progress-arrow" style="color:' in result
+    assert "position:absolute" not in result
+
+
+def test_progress_connector_arrow_is_teal_when_filled_grey_when_not():
+    filled = uc.progress([{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}])
+    not_filled = uc.progress([{"label": "A", "sub": "", "state": "future"}, {"label": "B", "sub": "", "state": "future"}])
+    assert "#0D9488" in filled
+    assert "#9CA7B4" in not_filled
+
+
+def test_progress_arrow_is_a_sibling_of_the_step_spans_not_nested_inside_one():
+    # polish-2 live-check round regression: the arrow must sit in the gap
+    # between two step elements, never inside either one's own span (which
+    # is what let it render on top of a circle before).
+    steps = [{"label": "A", "sub": "", "state": "done"}, {"label": "B", "sub": "", "state": "future"}]
+    result = uc.progress(steps)
+    first_step_close = result.index("</p></span>")  # label closes, then the step span itself closes
+    arrow_open = result.index('<span class="aae-progress-arrow"')
+    second_step_open = result.rindex('<span class="aae-progress-step">')
+    assert first_step_close < arrow_open < second_step_open
+    assert result.count('class="aae-progress-step"') == 2
+    assert result.count('class="aae-progress-arrow"') == 1
+
+
 # ---------------------------------------------------------------------------
 # code_block() / gherkin_highlight() / log_highlight()
 # ---------------------------------------------------------------------------
@@ -288,6 +374,17 @@ def test_code_block_wraps_prebuilt_content():
     result = uc.code_block("already &lt;escaped&gt; text")
     assert "already &lt;escaped&gt; text" in result
     assert result.startswith('<pre class="aae-code aae-code--text"')
+
+
+def test_code_block_has_inline_style():
+    # polish-2 live-check round: same reasoning as kpi_row's inline-style
+    # test above -- an inline style= on the <pre> itself, verbatim.
+    result = uc.code_block("x")
+    assert (
+        'style="background:#0F1B2D;color:#D7E0EA;border-radius:7px;padding:12px 14px;'
+        'font-family:\'Source Code Pro\',monospace;font-size:11.5px;line-height:1.6;'
+        'white-space:pre-wrap;margin:0"'
+    ) in result
 
 
 def test_gherkin_highlight_escapes_raw_model_text():
@@ -300,18 +397,28 @@ def test_gherkin_highlight_escapes_raw_model_text():
 def test_gherkin_highlight_spans_keywords():
     raw = "Scenario: S01 - Initial payment succeeds\nGiven a valid payment\nWhen submitted\nThen it succeeds\nAnd one charge exists"
     result = uc.gherkin_highlight(raw)
-    assert '<span class="aae-kw-scenario">Scenario</span>' in result
-    assert '<span class="aae-kw-step">Given</span>' in result
-    assert '<span class="aae-kw-step">When</span>' in result
-    assert '<span class="aae-kw-step">Then</span>' in result
-    assert '<span class="aae-kw-step">And</span>' in result
+    assert '<span class="aae-kw-scenario" style="color:#5EEAD4">Scenario</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">Given</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">When</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">Then</span>' in result
+    assert '<span class="aae-kw-step" style="color:#93C5FD">And</span>' in result
 
 
 def test_gherkin_highlight_does_not_rewrite_keyword_substrings_mid_line():
     # "Andover" must not be treated as the And keyword.
     raw = "Andover is a town, not a step keyword"
     result = uc.gherkin_highlight(raw)
-    assert '<span class="aae-kw-step">And</span>' not in result
+    assert '>And</span>' not in result
+
+
+def test_gherkin_highlight_preserves_blank_lines():
+    # Live-check root cause: real Gherkin can have blank lines between
+    # steps -- gherkin_highlight() itself must never collapse them (the
+    # fix for Markdown eating them is st.html() at the call site, but
+    # this function's own output must still carry them through intact).
+    raw = "Scenario: S01\n\nGiven a valid payment\nWhen submitted"
+    result = uc.gherkin_highlight(raw)
+    assert "\n\n" in result
 
 
 def test_log_highlight_escapes_raw_text():
@@ -323,8 +430,41 @@ def test_log_highlight_escapes_raw_text():
 def test_log_highlight_spans_passed_and_failed():
     raw = "tests/t01.py PASSED\ntests/t04.py FAILED"
     result = uc.log_highlight(raw)
-    assert '<span class="aae-log-pass">PASSED</span>' in result
-    assert '<span class="aae-log-fail">FAILED</span>' in result
+    assert '<span class="aae-log-pass" style="color:#86EFAC">PASSED</span>' in result
+    assert '<span class="aae-log-fail" style="color:#FCA5A5">FAILED</span>' in result
+
+
+# ---------------------------------------------------------------------------
+# polish-2 live-check round: a blank line inside HTML passed to
+# st.markdown(unsafe_allow_html=True) ends Markdown's raw-HTML-block
+# parsing early (CommonMark's own rule) -- the rest renders as a plain
+# paragraph instead of staying inside the intended tag. code_block()'s
+# own output is exempt (its three call sites in ui.py now use st.html(),
+# which never runs the Markdown parser at all) -- this guards every OTHER
+# HTML-building function, which must never embed a literal blank line.
+# ---------------------------------------------------------------------------
+
+
+def test_no_other_html_builder_embeds_a_blank_line():
+    samples = [
+        uc.card("Heading", "<p>Body</p><p>More</p>", tone="teal-accent"),
+        uc.table(["A", "B"], [["1", "2"], ["3", "4"]], fixed_layout=True, header_variant="teal"),
+        uc.banner("Title", "Sub line", variant="action-needed", action_html="<a href='#x'>Go</a>"),
+        uc.kpi_row([{"label": "A", "value": "1", "sub": "s", "tone": "passed"}]),
+        uc.progress([{"label": "Step", "sub": "waiting", "state": "current"}, {"label": "Next", "sub": "", "state": "future"}]),
+        uc.conf_bar(0.8, 0.75),
+        uc.pill("Matches", "matches"),
+        uc.labeled_section("aae-label-problem", "PROBLEM", "Some text."),
+        uc.checklist(["One", "Two"]),
+        uc.numbered_steps(["One", "Two"]),
+        uc.busy_indicator("Generating scenarios…"),
+        uc.decision_trace_table(
+            [{"checkpoint": "COVERAGE", "icon": "✅", "decision_text": "x", "detail": None, "confidence": 0.9,
+              "threshold": 0.75, "route": "AUTO", "source": "DECIDER", "override": False, "outcome": "Auto"}]
+        ),
+    ]
+    for sample in samples:
+        assert "\n\n" not in sample, sample[:200]
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +487,26 @@ def test_labeled_section_escapes_both_params():
 def test_small_caption_escapes_text():
     result = uc.small_caption(UNSAFE_TEXT)
     assert ESCAPED_UNSAFE_TEXT in result
-    assert '<p class="aae-caption">' in result
+
+
+def test_checklist_renders_teal_check_items_escaped():
+    # polish-2 group F15: Overview's "Key acceptance criteria" list gets
+    # teal check bullets instead of a plain <ul>.
+    result = uc.checklist(["Handle timeouts", UNSAFE_TEXT])
+    assert "aae-checklist" in result
+    assert "Handle timeouts" in result
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result
+
+
+def test_numbered_steps_renders_teal_numbered_items_escaped():
+    # polish-2 group F15: Overview's "What the agent does" list gets teal
+    # numbered circles instead of a plain <ol>.
+    result = uc.numbered_steps(["Reads the requirement.", UNSAFE_TEXT])
+    assert "aae-numbered-steps" in result
+    assert "Reads the requirement." in result
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +560,17 @@ def test_widget_card_container_is_callable():
     assert callable(uc.widget_card_container)
 
 
+def test_busy_indicator_escapes_label():
+    result = uc.busy_indicator(UNSAFE_TEXT)
+    assert ESCAPED_UNSAFE_TEXT in result
+    assert "<script>" not in result
+
+
+def test_busy_indicator_has_the_pulsing_dot_span():
+    result = uc.busy_indicator("Generating scenarios…")
+    assert '<span class="aae-busy-dot">' in result
+
+
 # ---------------------------------------------------------------------------
 # AAE_CSS -- a static config-like asset, not testable behavior in the usual
 # TDD sense; a smoke test still catches an accidental drift between the
@@ -442,6 +612,47 @@ def test_aae_css_table_rules_use_important_and_higher_specificity():
     assert "font-size: 12.5px !important;\n    line-height: 1.35 !important;" in uc.AAE_CSS
 
 
+def test_aae_css_rule_quote_has_explicit_13px_font_size():
+    # polish-2 group F16: .aae-rule-quote is a bare <div>, not a <p>, so
+    # the global 13px/1.45 body rule (which only targets p/li/etc.) never
+    # applied to it -- it fell back to Streamlit's markdown default,
+    # rendering larger than every other body-text element on the page.
+    assert ".aae-rule-quote {" in uc.AAE_CSS
+    rule_quote_block = uc.AAE_CSS.split(".aae-rule-quote {")[1].split("}")[0]
+    assert "font-size: 13px" in rule_quote_block
+    assert "line-height: 1.45" in rule_quote_block
+
+
+def test_aae_css_kpi_value_rule_no_longer_fights_the_inline_style():
+    # polish-2 live-check round: group F16's raised-specificity fix (a
+    # .aae-kpi-value rule with font-size/font-weight !important) was itself
+    # the reason the KPI numbers STILL rendered small after kpi_row() got
+    # an inline style="font-size:30px..." -- a stylesheet !important beats
+    # an inline style with no !important of its own, regardless of
+    # specificity. font-size/weight must live ONLY in the inline style now
+    # (see test_kpi_row_value_has_inline_style); this rule keeps color/
+    # margin (which the inline style doesn't set) but must never reclaim
+    # font-size/font-weight, or it would cancel the inline fix again.
+    assert '[data-testid="stMarkdownContainer"] .aae-kpi-value {' in uc.AAE_CSS
+    kpi_value_block = uc.AAE_CSS.split('[data-testid="stMarkdownContainer"] .aae-kpi-value {')[1].split("}")[0]
+    assert "font-size" not in kpi_value_block
+    assert "font-weight" not in kpi_value_block
+    assert "color: #0F1B2D !important;" in kpi_value_block
+
+
+def test_aae_css_code_block_rules_use_important_and_higher_specificity():
+    # polish-2 group E: live screenshots showed Gherkin/log/JSON rendering
+    # as flattened paragraph text on a light background despite correct-
+    # looking .aae-code source -- the same class of bug as the table fix
+    # above (confirmed: .aae-code was a bare, un-raised selector with no
+    # !important, so Streamlit's own stMarkdownContainer/p rules won the
+    # cascade). Same fix: raised specificity + !important.
+    assert '[data-testid="stMarkdownContainer"] .aae-code {' in uc.AAE_CSS
+    assert "background-color: #0F1B2D !important;" in uc.AAE_CSS
+    assert "white-space: pre-wrap !important;" in uc.AAE_CSS
+    assert 'font-family: "Source Code Pro", monospace !important;' in uc.AAE_CSS
+
+
 def test_aae_css_vertical_and_horizontal_card_gap_both_16px():
     assert '[data-testid="stVerticalBlock"] {\n    gap: 16px !important;' in uc.AAE_CSS
     assert '[data-testid="stHorizontalBlock"] {\n    gap: 16px !important;' in uc.AAE_CSS
@@ -464,6 +675,26 @@ def test_aae_css_has_no_aite_prefixed_classes():
     assert "aite-" not in uc.AAE_CSS
 
 
+def test_aae_css_results_download_buttons_are_teal():
+    # polish-2 group B5: the two Results-page download buttons are teal
+    # like every other live/enabled control (download_report_btn/
+    # download_evidence_btn, shared by both the live st.download_button
+    # and the locked st.button fallback).
+    assert ".st-key-download_report_btn button" in uc.AAE_CSS
+    assert ".st-key-download_evidence_btn button" in uc.AAE_CSS
+
+
+def test_aae_css_banner_action_buttons_are_teal():
+    # polish-2 group B4: the action banner's cross-page "Go to X" button
+    # (a plain st.button keyed jump_to_action_page) and the same-page
+    # "Jump to it" anchor (styled via .aae-btn-teal, since it's a real <a>,
+    # not a widget) both read teal, the same brand accent every other
+    # live/enabled control already uses.
+    assert ".st-key-jump_to_action_page button {" in uc.AAE_CSS
+    assert f"background-color: {uc._CONF_TEAL} !important;" in uc.AAE_CSS
+    assert ".aae-btn-teal {" in uc.AAE_CSS
+
+
 # ---------------------------------------------------------------------------
 # decision_trace_table() -- the ONE renderer for decision_trace.
 # build_decision_trace's (outcome-extended) rows, used on Analysis/
@@ -473,12 +704,29 @@ def test_aae_css_has_no_aite_prefixed_classes():
 # ---------------------------------------------------------------------------
 
 
-def _row(checkpoint, decision_text, confidence, threshold, outcome):
+def _row(checkpoint, decision_text, confidence, threshold, outcome, detail=None):
     return {
-        "checkpoint": checkpoint, "icon": "✅", "decision_text": decision_text,
+        "checkpoint": checkpoint, "icon": "✅", "decision_text": decision_text, "detail": detail,
         "confidence": confidence, "threshold": threshold, "route": "AUTO",
         "source": "DECIDER", "override": False, "outcome": outcome,
     }
+
+
+def test_decision_trace_table_outcome_detail_becomes_a_tooltip_not_a_long_decision_sentence():
+    # polish-2 group D12: a long override/escalated explanation lives in
+    # the Outcome pill's title= tooltip now, never appended onto
+    # decision_text.
+    rows = [_row("COVERAGE", "REMEDIATE_GAP (human)", 0.55, 0.75, "Human override", detail="override of Decider's 'ACCEPT_COVERAGE' suggestion")]
+    result = uc.decision_trace_table(rows)
+    assert "REMEDIATE_GAP (human)" in result
+    assert "override of Decider's" not in result.split("REMEDIATE_GAP (human)")[0]  # not glued onto Decision
+    assert 'title="override of Decider' in result
+
+
+def test_decision_trace_table_no_tooltip_when_no_detail():
+    rows = [_row("COVERAGE", "ACCEPT_COVERAGE (human)", 0.97, 0.75, "Human confirmed")]
+    result = uc.decision_trace_table(rows)
+    assert "title=" not in result
 
 
 def test_decision_trace_table_renders_checkpoint_and_decision_text():
