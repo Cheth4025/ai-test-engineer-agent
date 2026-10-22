@@ -534,3 +534,167 @@ def test_filter_items_limit_caps_count():
     items = [SINGLE_NOUL_ITEM, SINGLE_CHOICE_ITEM, REPLAY_ITEM]
     filtered = bd.filter_items(items, only=None, limit=2)
     assert len(filtered) == 2
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: Bedrock scored 0% on every noul item because the prompt
+# listed a noul question's criteria dict keys ("true"/"false" strings) as
+# "valid answers", so Bedrock dutifully answered with the string "false"
+# instead of the JSON boolean False -- which never equals the real bool
+# label. See benchmarks/results_20261022T032446Z.json / the calibration
+# Phase 3 plan for the real-run numbers this reproduces.
+# ---------------------------------------------------------------------------
+
+
+def test_build_bedrock_prompt_asks_for_a_json_boolean_on_noul_questions_not_a_quoted_string():
+    prompt = bd.build_bedrock_prompt(SINGLE_NOUL_ITEM)
+    assert "JSON boolean" in prompt
+    # the old bug's literal instruction must be gone for noul questions
+    assert "Valid answers for 'ambiguity_BR01'" not in prompt
+
+
+def test_build_bedrock_prompt_still_lists_valid_answers_for_choice_questions():
+    prompt = bd.build_bedrock_prompt(SINGLE_CHOICE_ITEM)
+    assert "Valid answers for 'failure_action'" in prompt
+    assert "REPORT_FAILURE" in prompt
+
+
+def test_call_bedrock_coerces_a_quoted_true_false_string_for_noul_questions():
+    """Reproduces the real bug verbatim: Bedrock answered the literal string
+    "false" for a noul question whose correct label is the bool False."""
+    client = _StubBedrockClient(
+        response_text='{"ambiguity_BR01": {"answer": "false", "confidence": 0.9}}'
+    )
+
+    result = bd.call_bedrock(client, "us.anthropic.claude-sonnet-4-6", SINGLE_NOUL_ITEM)
+
+    outcome = result.outcomes[0]
+    assert outcome.answer is False  # coerced from the string "false" to a real bool
+    assert outcome.correct is True  # label is False
+
+
+def test_call_bedrock_coerces_a_quoted_true_string_case_insensitively():
+    client = _StubBedrockClient(
+        response_text='{"ambiguity_BR01": {"answer": "TRUE", "confidence": 0.7}}'
+    )
+
+    result = bd.call_bedrock(client, "us.anthropic.claude-sonnet-4-6", SINGLE_NOUL_ITEM)
+
+    outcome = result.outcomes[0]
+    assert outcome.answer is True
+    assert outcome.correct is False  # label is False
+
+
+def test_call_bedrock_leaves_a_real_bool_answer_untouched():
+    client = _StubBedrockClient(
+        response_text='{"ambiguity_BR01": {"answer": false, "confidence": 0.9}}'
+    )
+
+    result = bd.call_bedrock(client, "us.anthropic.claude-sonnet-4-6", SINGLE_NOUL_ITEM)
+
+    outcome = result.outcomes[0]
+    assert outcome.answer is False
+    assert outcome.correct is True
+
+
+def test_call_bedrock_does_not_coerce_a_choice_answer_string():
+    client = _StubBedrockClient(
+        response_text='{"failure_action": {"answer": "REPORT_FAILURE", "confidence": 0.8}}'
+    )
+
+    result = bd.call_bedrock(client, "us.anthropic.claude-sonnet-4-6", SINGLE_CHOICE_ITEM)
+
+    outcome = result.outcomes[0]
+    assert outcome.answer == "REPORT_FAILURE"
+    assert outcome.correct is True
+
+
+# ---------------------------------------------------------------------------
+# Held-out items: compute_summary splits them out of per_question_type /
+# threshold_sweep and reports them separately, so wording fixes can be
+# checked for overfitting against the exact items used to justify them.
+# ---------------------------------------------------------------------------
+
+
+HELD_OUT_NOUL_ITEM = {
+    **SINGLE_NOUL_ITEM,
+    "item_id": "ambiguity_br06_held_out",
+    "held_out": True,
+}
+
+
+def test_compute_summary_excludes_held_out_items_from_per_question_type():
+    items = [SINGLE_NOUL_ITEM, HELD_OUT_NOUL_ITEM]
+    decider_results = [
+        _decider_result(
+            "ambiguity_br01_clear_not_ambiguous",
+            "ambiguity_BRxx",
+            [bd.Outcome("ambiguity_BR01", False, 0.9, {"true": 0.1, "false": 0.9}, "AUTO", False, True)],
+        ),
+        _decider_result(
+            "ambiguity_br06_held_out",
+            "ambiguity_BRxx",
+            [bd.Outcome("ambiguity_BR01", True, 0.9, {"true": 0.9, "false": 0.1}, "AUTO", True, False)],
+        ),
+    ]
+    bedrock_results = [
+        _bedrock_result("ambiguity_br01_clear_not_ambiguous", "ambiguity_BRxx", []),
+        _bedrock_result("ambiguity_br06_held_out", "ambiguity_BRxx", []),
+    ]
+
+    summary = bd.compute_summary(decider_results, bedrock_results, items, bd.DEFAULT_DECIDER_CFG)
+
+    # only the non-held-out outcome counts toward the main table
+    assert summary["per_question_type"]["ambiguity_BRxx"]["n"] == 1
+    assert summary["per_question_type"]["ambiguity_BRxx"]["decider_accuracy"] == 1.0
+
+
+def test_compute_summary_reports_held_out_accuracy_separately():
+    items = [SINGLE_NOUL_ITEM, HELD_OUT_NOUL_ITEM]
+    decider_results = [
+        _decider_result(
+            "ambiguity_br01_clear_not_ambiguous",
+            "ambiguity_BRxx",
+            [bd.Outcome("ambiguity_BR01", False, 0.9, {"true": 0.1, "false": 0.9}, "AUTO", False, True)],
+        ),
+        _decider_result(
+            "ambiguity_br06_held_out",
+            "ambiguity_BRxx",
+            [bd.Outcome("ambiguity_BR01", True, 0.9, {"true": 0.9, "false": 0.1}, "AUTO", True, False)],
+        ),
+    ]
+    bedrock_results = [
+        _bedrock_result("ambiguity_br01_clear_not_ambiguous", "ambiguity_BRxx", []),
+        _bedrock_result("ambiguity_br06_held_out", "ambiguity_BRxx", []),
+    ]
+
+    summary = bd.compute_summary(decider_results, bedrock_results, items, bd.DEFAULT_DECIDER_CFG)
+
+    held_out = summary["held_out_per_question_type"]["ambiguity_BRxx"]
+    assert held_out["n"] == 1
+    assert held_out["decider_accuracy"] == 0.0
+
+
+def test_render_markdown_summary_includes_held_out_section():
+    items = [SINGLE_NOUL_ITEM, HELD_OUT_NOUL_ITEM]
+    decider_results = [
+        _decider_result(
+            "ambiguity_br01_clear_not_ambiguous",
+            "ambiguity_BRxx",
+            [bd.Outcome("ambiguity_BR01", False, 0.9, {"true": 0.1, "false": 0.9}, "AUTO", False, True)],
+        ),
+        _decider_result(
+            "ambiguity_br06_held_out",
+            "ambiguity_BRxx",
+            [bd.Outcome("ambiguity_BR01", True, 0.9, {"true": 0.9, "false": 0.1}, "AUTO", True, False)],
+        ),
+    ]
+    bedrock_results = [
+        _bedrock_result("ambiguity_br01_clear_not_ambiguous", "ambiguity_BRxx", []),
+        _bedrock_result("ambiguity_br06_held_out", "ambiguity_BRxx", []),
+    ]
+    summary = bd.compute_summary(decider_results, bedrock_results, items, bd.DEFAULT_DECIDER_CFG)
+
+    markdown = bd.render_markdown_summary(summary)
+
+    assert "Held-out accuracy" in markdown

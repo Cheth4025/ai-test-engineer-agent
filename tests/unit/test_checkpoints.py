@@ -255,6 +255,27 @@ def test_grounding_question_embeds_its_own_gherkin_and_oracle(tmp_path):
     ]
 
 
+def test_grounding_question_checks_each_required_check_one_at_a_time(tmp_path):
+    """Phase 3 wording fix: the old compound triple-negative framing ("no
+    weaker, missing, or additional claim") is replaced by an explicit
+    per-check instruction -- same ground truth, clearer mechanics. Live
+    grounding_Sxx confidence never exceeded 0.75 under the old wording."""
+    checkpoint, controller, holder = _setup_coverage_checkpoint(tmp_path, ["S01"])
+
+    questions = checkpoint.build_questions(None)
+
+    instructions = questions["grounding_S01"]["instructions"]
+    criteria = questions["grounding_S01"]["criteria"]
+    assert "Check each required check" in instructions
+    assert "one at a time" in instructions
+    assert "Every required check listed for S01 is explicitly present" in criteria["true"]
+    assert "missing, weaker, or contradicted" in criteria["false"]
+    # still self-contained: the fixture's gherkin/oracle/rule text stay embedded
+    assert _valid_scenario("S01")["gherkin"] in instructions
+    assert "obs EQ 1" in instructions
+    assert "meaning of BR01" in instructions
+
+
 # -- grounding never promotes an invalid row ---------------------------------
 
 
@@ -756,6 +777,83 @@ def test_generate_scenarios_strategy_question_references_ambiguity_evidence(tmp_
     assert "which gateway?" in questions["strategy_action"]["instructions"]
 
 
+# -- ambiguity/strategy wording fix: polarity is tied to the CRITICAL tag,
+# not inferred from the mere presence of an open question (Phase 3 fix for
+# the BR04 miscalibration: a rule with only non-critical ambiguities scored
+# "ambiguous" live despite its own instructions already saying so) --------
+
+
+def test_ambiguity_question_states_how_many_recorded_ambiguities_are_critical(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": ONE_RULE_INTERPRETATION["rules"],
+            "ambiguities": [
+                {"id": "A1", "rule_id": "BR01", "question": "non-critical one", "critical": False, "status": "open"},
+                {"id": "A2", "rule_id": "BR01", "question": "another non-critical one", "critical": False, "status": "open"},
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    questions = checkpoint.build_questions(None)
+
+    instructions = questions["ambiguity_BR01"]["instructions"]
+    assert "0 of 2 recorded ambiguities for this rule are CRITICAL" in instructions
+    assert "non-critical" in instructions
+    assert "out of scope for S01-S05" in instructions
+    assert "must NOT make this rule ambiguous" in instructions
+
+
+def test_ambiguity_criteria_ties_true_to_a_critical_tag_and_false_to_its_absence(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": ONE_RULE_INTERPRETATION["rules"],
+            "ambiguities": [
+                {"id": "A1", "rule_id": "BR01", "question": "critical one", "critical": True, "status": "open"},
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    questions = checkpoint.build_questions(None)
+
+    instructions = questions["ambiguity_BR01"]["instructions"]
+    criteria = questions["ambiguity_BR01"]["criteria"]
+    assert "1 of 1 recorded ambiguities for this rule are CRITICAL" in instructions
+    assert "(CRITICAL -- changes a required assertion): critical one" in instructions
+    assert "marked CRITICAL above" in criteria["true"]
+    assert "no ambiguity marked CRITICAL above" in criteria["false"]
+
+
+def test_strategy_action_instructions_state_the_critical_over_total_count(tmp_path):
+    attempt_log = AttemptLog()
+    attempt_log.record_success(
+        "interpret_requirement",
+        1,
+        {
+            "rules": ONE_RULE_INTERPRETATION["rules"],
+            "ambiguities": [
+                {"id": "A1", "rule_id": "BR01", "question": "critical one", "critical": True, "status": "open"},
+                {"id": "A2", "rule_id": "BR01", "question": "non-critical one", "critical": False, "status": "open"},
+            ],
+        },
+    )
+    controller = RunController("test-run", tmp_path)
+    checkpoint = build_generate_scenarios_checkpoint(attempt_log, controller)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "1 of 2 are marked CRITICAL" in questions["strategy_action"]["instructions"]
+
+
 # -- host label resolution -----------------------------------------------------
 
 
@@ -854,6 +952,25 @@ def _setup_failure_checkpoint(tmp_path, results: dict):
     checkpoint = build_failure_checkpoint(attempt_log, controller, REQUIREMENT_TEXT_WITH_BR06, holder)
     checkpoint.build_questions(None)
     return checkpoint, controller, holder
+
+
+def test_failure_action_instructions_embed_the_same_facts_as_failure_class(tmp_path):
+    """Phase 3 wording fix: failure_action's instructions were generic
+    boilerplate that never restated the failure's own facts, unlike
+    failure_class (which does, and scores cleanly) -- live failure_action
+    confidence (~0.27) diverged sharply from its own top probability
+    (~0.65) and never auto'd at any swept threshold."""
+    checkpoint, controller, holder = _setup_failure_checkpoint(tmp_path, _results(failed=True))
+
+    questions = checkpoint.build_questions(None)
+
+    instructions = questions["failure_action"]["instructions"]
+    assert "T04" in instructions
+    assert "1 ledger entry" in instructions  # expected
+    assert "2 ledger entries" in instructions  # actual
+    assert "assert 2 == 1" in instructions  # failure_message
+    assert "BR06: Re-delivery" in instructions  # rule_text
+    assert "Evidence reference captured: True" in instructions
 
 
 def test_failure_facts_extracts_rule_text_and_real_counts():
@@ -1048,6 +1165,75 @@ def test_completion_resolve_not_ready_blocks(tmp_path):
 
     assert isinstance(action, Deny)
     assert controller.workflow_state == "BLOCKED"
+
+
+# -- completion_action wording fix: a new has_failure fact states whether
+# analysis.json was even supposed to exist. resolve()'s guard is untouched --
+# it still only looks at results_exists/analysis_exists (asserted above). --
+
+
+def test_completion_instructions_state_has_failure_true_when_a_test_failed(tmp_path):
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    controller.save_evidence("results.json", _results(failed=True))
+    controller.save_evidence("analysis.json", {"has_failure": True})
+    holder: dict = {}
+    checkpoint = build_completion_checkpoint(attempt_log, controller, holder)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "A test failure was recorded in results.json: True" in questions["completion_action"]["instructions"]
+    assert holder["completion_ready"]["has_failure"] is True
+
+
+def test_completion_instructions_state_has_failure_false_when_all_passed(tmp_path):
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    controller.save_evidence("results.json", _results(failed=False))
+    holder: dict = {}
+    checkpoint = build_completion_checkpoint(attempt_log, controller, holder)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "A test failure was recorded in results.json: False" in questions["completion_action"]["instructions"]
+    assert holder["completion_ready"]["has_failure"] is False
+
+
+def test_completion_has_failure_unknown_when_results_json_missing(tmp_path):
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    holder: dict = {}
+    checkpoint = build_completion_checkpoint(attempt_log, controller, holder)
+
+    questions = checkpoint.build_questions(None)
+
+    assert "A test failure was recorded in results.json: unknown" in questions["completion_action"]["instructions"]
+    assert holder["completion_ready"]["has_failure"] == "unknown"
+
+
+def test_completion_has_failure_unknown_when_results_json_malformed(tmp_path):
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    (controller.run_dir / "results.json").write_text("not valid json {{{", encoding="utf-8")
+    holder: dict = {}
+    checkpoint = build_completion_checkpoint(attempt_log, controller, holder)
+
+    questions = checkpoint.build_questions(None)  # must never raise
+
+    assert "A test failure was recorded in results.json: unknown" in questions["completion_action"]["instructions"]
+    assert holder["completion_ready"]["has_failure"] == "unknown"
+
+
+def test_completion_has_failure_unknown_when_results_json_missing_tests_key(tmp_path):
+    attempt_log = AttemptLog()
+    controller = RunController("test-run", tmp_path)
+    controller.save_evidence("results.json", {"execution_id": "x"})  # no "tests" key
+    holder: dict = {}
+    checkpoint = build_completion_checkpoint(attempt_log, controller, holder)
+
+    questions = checkpoint.build_questions(None)  # must never raise
+
+    assert holder["completion_ready"]["has_failure"] == "unknown"
 
 
 def test_human_finalize_results_pick_proceeds_and_writes_report(tmp_path):

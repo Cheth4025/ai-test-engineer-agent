@@ -245,11 +245,33 @@ def build_bedrock_prompt(item: dict) -> str:
         "",
     ]
     for name, question in questions.items():
-        valid_answers = list(question["criteria"].keys())
         lines.append(f"Question '{name}' ({question['type']}): {question['instructions']}")
-        lines.append(f"Valid answers for '{name}': {valid_answers}")
+        if question["type"] == "noul":
+            # A noul question's criteria dict is keyed by the strings "true"/
+            # "false" (see checkpoints.py) -- those are labels, not the wire
+            # value. Listing them as "valid answers" previously told Bedrock
+            # to echo the literal string "false", which never equals the
+            # real bool label False (the bug this fixed: every noul item
+            # scored 0% regardless of judgement -- see
+            # tests/unit/test_benchmark_decider.py's coercion tests).
+            lines.append(f"Answer '{name}' with the JSON boolean true or false -- not a quoted string.")
+        else:
+            valid_answers = list(question["criteria"].keys())
+            lines.append(f"Valid answers for '{name}': {valid_answers}")
         lines.append("")
     return "\n".join(lines)
+
+
+def _coerce_noul_answer(answer: Any) -> Any:
+    """Accepts a real bool, or a "true"/"false" string (any case) a model
+    might still echo despite build_bedrock_prompt's explicit instruction,
+    and returns a real bool either way. Anything else is returned
+    unchanged -- never fabricates an answer the model didn't give."""
+    if isinstance(answer, bool):
+        return answer
+    if isinstance(answer, str) and answer.strip().lower() in ("true", "false"):
+        return answer.strip().lower() == "true"
+    return answer
 
 
 def parse_bedrock_json_answer(raw_text: str) -> dict:
@@ -279,6 +301,7 @@ def call_bedrock(client, model_id: str, item: dict) -> BedrockResult:
     BedrockResult.error so the run continues to the next item."""
     prompt = build_bedrock_prompt(item)
     labels = _labels_for(item)
+    questions = _questions_for(item)
 
     start = time.monotonic()
     try:
@@ -321,6 +344,8 @@ def call_bedrock(client, model_id: str, item: dict) -> BedrockResult:
             outcomes.append(Outcome(name, None, None, None, None, None, None))
             continue
         answer = entry.get("answer")
+        if questions[name]["type"] == "noul":
+            answer = _coerce_noul_answer(answer)
         confidence = entry.get("confidence")
         correct = (answer == label) if label is not None else None
         outcomes.append(Outcome(name, answer, confidence, None, None, answer, correct))
@@ -375,22 +400,36 @@ def compute_summary(
         item = item_by_id.get(result.item_id)
         return bool(item and item["item_type"] == "replay")
 
-    non_replay_decider = [r for r in decider_results if not is_replay(r)]
-    non_replay_bedrock = [r for r in bedrock_results if not is_replay(r)]
+    def is_held_out(result) -> bool:
+        item = item_by_id.get(result.item_id)
+        return bool(item and item.get("held_out", False))
+
+    non_replay_decider = [r for r in decider_results if not is_replay(r) and not is_held_out(r)]
+    non_replay_bedrock = [r for r in bedrock_results if not is_replay(r) and not is_held_out(r)]
     replay_decider = [r for r in decider_results if is_replay(r)]
+    held_out_decider = [r for r in decider_results if not is_replay(r) and is_held_out(r)]
+    held_out_bedrock = [r for r in bedrock_results if not is_replay(r) and is_held_out(r)]
+
+    def per_type_table(decider_rows: list[DeciderResult], bedrock_rows: list[BedrockResult]) -> dict:
+        types = sorted({r.question_type for r in decider_rows} | {r.question_type for r in bedrock_rows})
+        table = {}
+        for qtype in types:
+            d_outcomes = [o for r in decider_rows if r.question_type == qtype for o in r.outcomes]
+            b_outcomes = [o for r in bedrock_rows if r.question_type == qtype for o in r.outcomes]
+            table[qtype] = {
+                "n": len(d_outcomes) or len(b_outcomes),
+                "decider_accuracy": _accuracy(d_outcomes),
+                "bedrock_accuracy": _accuracy(b_outcomes),
+                "decider_escalation_rate": _escalation_rate(d_outcomes),
+            }
+        return table
 
     question_types = sorted({r.question_type for r in non_replay_decider} | {r.question_type for r in non_replay_bedrock})
-
-    per_question_type = {}
-    for qtype in question_types:
-        d_outcomes = [o for r in non_replay_decider if r.question_type == qtype for o in r.outcomes]
-        b_outcomes = [o for r in non_replay_bedrock if r.question_type == qtype for o in r.outcomes]
-        per_question_type[qtype] = {
-            "n": len(d_outcomes) or len(b_outcomes),
-            "decider_accuracy": _accuracy(d_outcomes),
-            "bedrock_accuracy": _accuracy(b_outcomes),
-            "decider_escalation_rate": _escalation_rate(d_outcomes),
-        }
+    per_question_type = per_type_table(non_replay_decider, non_replay_bedrock)
+    # Reported separately from per_question_type so wording decisions can be
+    # checked for overfitting against the exact (training) items used to
+    # justify them -- never folded back into the training-set numbers above.
+    held_out_per_question_type = per_type_table(held_out_decider, held_out_bedrock)
 
     decider_latencies = [r.latency_ms for r in decider_results if r.latency_ms is not None]
     bedrock_latencies = [r.latency_ms for r in bedrock_results if r.latency_ms is not None]
@@ -484,6 +523,7 @@ def compute_summary(
 
     return {
         "per_question_type": per_question_type,
+        "held_out_per_question_type": held_out_per_question_type,
         "threshold_sweep": threshold_sweep,
         "latency": latency,
         "cost": cost,
@@ -509,6 +549,20 @@ def render_markdown_summary(summary: dict) -> str:
             f"| {qtype} | {row['n']} | {_fmt(row['decider_accuracy'])} | "
             f"{_fmt(row['bedrock_accuracy'])} | {_fmt(row['decider_escalation_rate'])} |"
         )
+
+    if summary["held_out_per_question_type"]:
+        lines += ["", "## Held-out accuracy", "", (
+            "Held-out items were labelled before any wording change this round and are never "
+            "used to adjust wording -- this checks whether a fix generalizes past the exact "
+            "items used to justify it."
+        ), ""]
+        lines.append("| question_type | n | decider_accuracy | bedrock_accuracy | decider_escalation_rate |")
+        lines.append("|---|---|---|---|---|")
+        for qtype, row in summary["held_out_per_question_type"].items():
+            lines.append(
+                f"| {qtype} | {row['n']} | {_fmt(row['decider_accuracy'])} | "
+                f"{_fmt(row['bedrock_accuracy'])} | {_fmt(row['decider_escalation_rate'])} |"
+            )
 
     lines += ["", "## Threshold sweep", ""]
     for qtype, sweep in summary["threshold_sweep"].items():

@@ -6,10 +6,10 @@
     "question_name": "ambiguity_BR01",
     "question": {
       "type": "noul",
-      "instructions": "Rule BR01: Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.. Known ambiguities for this rule: AMB-01 (non-critical): Who is responsible for generating the idempotency key — the client/caller or the payment service itself? The text says a key 'must be included' but does not specify who produces it. -- recorded, out of scope for S01-S05, does not change any assertion; AMB-02 (non-critical): What is the TTL or expiry policy for an idempotency key? After what period, if any, may the same key be reused for a new logical payment? -- recorded, out of scope for S01-S05, does not change any assertion",
+      "instructions": "Rule BR01: Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.. 0 of 2 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-01 (non-critical): Who is responsible for generating the idempotency key — the client/caller or the payment service itself? The text says a key 'must be included' but does not specify who produces it. -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous; AMB-02 (non-critical): What is the TTL or expiry policy for an idempotency key? After what period, if any, may the same key be reused for a new logical payment? -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous",
       "criteria": {
-        "true": "Rule BR01 (Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.) leaves a question whose answer would change what the test must assert -- e.g. which exact condition, value, or branch applies is not pinned down by the requirement text.",
-        "false": "Rule BR01 (Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.) is fully specified; nothing about it is unclear for writing a test that asserts the correct outcome."
+        "true": "Rule BR01 (Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BR01 (Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
       }
     },
     "state": {
@@ -49,10 +49,10 @@
     "question_name": "ambiguity_BR02",
     "question": {
       "type": "noul",
-      "instructions": "Rule BR02: When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.. Known ambiguities for this rule: AMB-03 (non-critical): BR02 references 'same payload' but BR03 only singles out 'different payment amount' as a rejection trigger. Does a mismatch in any non-amount payload field (e.g. currency, metadata, merchant ID) also cause a BR03-style rejection, or is it absorbed by BR02's idempotent resolution? -- recorded, out of scope for S01-S05, does not change any assertion",
+      "instructions": "Rule BR02: When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.. 0 of 1 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-03 (non-critical): BR02 references 'same payload' but BR03 only singles out 'different payment amount' as a rejection trigger. Does a mismatch in any non-amount payload field (e.g. currency, metadata, merchant ID) also cause a BR03-style rejection, or is it absorbed by BR02's idempotent resolution? -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous",
       "criteria": {
-        "true": "Rule BR02 (When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.) leaves a question whose answer would change what the test must assert -- e.g. which exact condition, value, or branch applies is not pinned down by the requirement text.",
-        "false": "Rule BR02 (When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.) is fully specified; nothing about it is unclear for writing a test that asserts the correct outcome."
+        "true": "Rule BR02 (When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BR02 (When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
       }
     },
     "state": {
@@ -84,10 +84,10 @@
     "question_name": "ambiguity_BR03",
     "question": {
       "type": "noul",
-      "instructions": "Rule BR03: If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.. Known ambiguities for this rule: AMB-04 (non-critical): BR03 specifies 'different payment amount' as the conflict trigger. Should a mismatched currency (same amount, different currency) also be treated as a conflict and rejected, or is currency not a conflict-triggering field? -- recorded, out of scope for S01-S05, does not change any assertion; AMB-05 (non-critical): What HTTP status code or error type should be returned when a same-key/different-amount conflict is detected? The text says 'rejected' but does not specify the response contract. -- recorded, out of scope for S01-S05, does not change any assertion",
+      "instructions": "Rule BR03: If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.. 0 of 2 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-04 (non-critical): BR03 specifies 'different payment amount' as the conflict trigger. Should a mismatched currency (same amount, different currency) also be treated as a conflict and rejected, or is currency not a conflict-triggering field? -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous; AMB-05 (non-critical): What HTTP status code or error type should be returned when a same-key/different-amount conflict is detected? The text says 'rejected' but does not specify the response contract. -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous",
       "criteria": {
-        "true": "Rule BR03 (If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.) leaves a question whose answer would change what the test must assert -- e.g. which exact condition, value, or branch applies is not pinned down by the requirement text.",
-        "false": "Rule BR03 (If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.) is fully specified; nothing about it is unclear for writing a test that asserts the correct outcome."
+        "true": "Rule BR03 (If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BR03 (If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
       }
     },
     "state": {
@@ -127,10 +127,10 @@
     "question_name": "ambiguity_BR05",
     "question": {
       "type": "noul",
-      "instructions": "Rule BR05: Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Known ambiguities for this rule: AMB-08 (non-critical): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined. -- recorded, out of scope for S01-S05, does not change any assertion; AMB-09 (non-critical): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence? -- recorded, out of scope for S01-S05, does not change any assertion; AMB-10 (critical): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.",
+      "instructions": "Rule BR05: Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. 1 of 3 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-08 (non-critical): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined. -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous; AMB-09 (non-critical): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence? -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous; AMB-10 (CRITICAL -- changes a required assertion): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.",
       "criteria": {
-        "true": "Rule BR05 (Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.) leaves a question whose answer would change what the test must assert -- e.g. which exact condition, value, or branch applies is not pinned down by the requirement text.",
-        "false": "Rule BR05 (Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.) is fully specified; nothing about it is unclear for writing a test that asserts the correct outcome."
+        "true": "Rule BR05 (Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BR05 (Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
       }
     },
     "state": {
@@ -178,10 +178,10 @@
     "question_name": "ambiguity_BRX",
     "question": {
       "type": "noul",
-      "instructions": "Rule BRX: The system must handle errors appropriately when a retry occurs.. Known ambiguities for this rule: AMB-X1 (critical): What counts as 'appropriate' error handling -- a specific status code, a retry count, a logged alert? The text names no concrete behavior.",
+      "instructions": "Rule BRX: The system must handle errors appropriately when a retry occurs.. 1 of 1 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-X1 (CRITICAL -- changes a required assertion): What counts as 'appropriate' error handling -- a specific status code, a retry count, a logged alert? The text names no concrete behavior.",
       "criteria": {
-        "true": "Rule BRX (The system must handle errors appropriately when a retry occurs.) leaves a question whose answer would change what the test must assert -- e.g. which exact condition, value, or branch applies is not pinned down by the requirement text.",
-        "false": "Rule BRX (The system must handle errors appropriately when a retry occurs.) is fully specified; nothing about it is unclear for writing a test that asserts the correct outcome."
+        "true": "Rule BRX (The system must handle errors appropriately when a retry occurs.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BRX (The system must handle errors appropriately when a retry occurs.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
       }
     },
     "state": {
@@ -213,10 +213,10 @@
     "question_name": "ambiguity_BRY",
     "question": {
       "type": "noul",
-      "instructions": "Rule BRY: Payment confirmations must be processed within a reasonable time frame.. Known ambiguities for this rule: AMB-Y1 (critical): What duration is 'reasonable' -- 1 second, 1 minute, 1 hour? No bound is given anywhere in the requirement.",
+      "instructions": "Rule BRY: Payment confirmations must be processed within a reasonable time frame.. 1 of 1 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-Y1 (CRITICAL -- changes a required assertion): What duration is 'reasonable' -- 1 second, 1 minute, 1 hour? No bound is given anywhere in the requirement.",
       "criteria": {
-        "true": "Rule BRY (Payment confirmations must be processed within a reasonable time frame.) leaves a question whose answer would change what the test must assert -- e.g. which exact condition, value, or branch applies is not pinned down by the requirement text.",
-        "false": "Rule BRY (Payment confirmations must be processed within a reasonable time frame.) is fully specified; nothing about it is unclear for writing a test that asserts the correct outcome."
+        "true": "Rule BRY (Payment confirmations must be processed within a reasonable time frame.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BRY (Payment confirmations must be processed within a reasonable time frame.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
       }
     },
     "state": {
@@ -242,13 +242,93 @@
     "label_rationale": "'Reasonable time frame' is undefined and directly determines what a timing assertion would need to check -- a genuinely critical gap, not a cosmetic one."
   },
   {
+    "item_id": "ambiguity_br06_held_out_not_ambiguous",
+    "item_type": "single",
+    "question_type": "ambiguity_BRxx",
+    "question_name": "ambiguity_BR06",
+    "question": {
+      "type": "noul",
+      "instructions": "Rule BR06: When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment.. 0 of 2 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-11 (non-critical): BR06 deduplicates callbacks by 'callback ID and payment ID'. Is the combination of both fields required for deduplication, or is callback ID alone sufficient? -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous; AMB-12 (non-critical): BR06 covers re-delivery of a 'successful' callback. Does an equivalent deduplication rule apply to failed or refunded callbacks, or is the no-duplicate-posting rule intentionally limited to success callbacks only? -- recorded, out of scope for S01-S05, does not change any assertion; its presence alone must NOT make this rule ambiguous",
+      "criteria": {
+        "true": "Rule BR06 (When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BR06 (When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
+      }
+    },
+    "state": {
+      "rules": [
+        {
+          "rule_id": "BR06",
+          "source_excerpt": "Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting.",
+          "meaning": "When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment."
+        }
+      ],
+      "ambiguities": [
+        {
+          "id": "AMB-11",
+          "rule_id": "BR06",
+          "question": "BR06 deduplicates callbacks by 'callback ID and payment ID'. Is the combination of both fields required for deduplication, or is callback ID alone sufficient?",
+          "critical": false,
+          "status": "open",
+          "human_response": null
+        },
+        {
+          "id": "AMB-12",
+          "rule_id": "BR06",
+          "question": "BR06 covers re-delivery of a 'successful' callback. Does an equivalent deduplication rule apply to failed or refunded callbacks, or is the no-duplicate-posting rule intentionally limited to success callbacks only?",
+          "critical": false,
+          "status": "open",
+          "human_response": null
+        }
+      ]
+    },
+    "label": false,
+    "label_rationale": "Held out before wording was written. BR06's only recorded ambiguities (AMB-11 callback-ID-alone sufficiency, AMB-12 failed/refunded-callback scope) are both non-critical; the duplicate-posting behavior S04 must assert is fully specified.",
+    "held_out": true
+  },
+  {
+    "item_id": "ambiguity_custom_held_out_authorization",
+    "item_type": "single",
+    "question_type": "ambiguity_BRxx",
+    "question_name": "ambiguity_BRW",
+    "question": {
+      "type": "noul",
+      "instructions": "Rule BRW: The system must verify the caller's authorization before processing a refund.. 1 of 1 recorded ambiguities for this rule are CRITICAL. Known ambiguities for this rule: AMB-W1 (CRITICAL -- changes a required assertion): What does 'verify authorization' mean operationally -- a signed token, a role check, a manual approval step? No concrete mechanism is named.",
+      "criteria": {
+        "true": "Rule BRW (The system must verify the caller's authorization before processing a refund.) has at least one ambiguity marked CRITICAL above -- its answer would change what a required scenario must assert. Non-critical open questions alone never make this answer true.",
+        "false": "Rule BRW (The system must verify the caller's authorization before processing a refund.) has no ambiguity marked CRITICAL above. Any recorded ambiguities are explicitly non-critical and do not change any required assertion."
+      }
+    },
+    "state": {
+      "rules": [
+        {
+          "rule_id": "BRW",
+          "source_excerpt": "BRW: The system must verify the caller's authorization before processing a refund.",
+          "meaning": "The system must verify the caller's authorization before processing a refund."
+        }
+      ],
+      "ambiguities": [
+        {
+          "id": "AMB-W1",
+          "rule_id": "BRW",
+          "question": "What does 'verify authorization' mean operationally -- a signed token, a role check, a manual approval step? No concrete mechanism is named.",
+          "critical": true,
+          "status": "open",
+          "human_response": null
+        }
+      ]
+    },
+    "label": true,
+    "label_rationale": "Held out before wording was written. 'Verify authorization' names no concrete mechanism; a test cannot assert a specific check without resolving this -- a genuinely critical gap.",
+    "held_out": true
+  },
+  {
     "item_id": "strategy_generate_no_ambiguities",
     "item_type": "single",
     "question_type": "strategy_action",
     "question_name": "strategy_action",
     "question": {
       "type": "choice",
-      "instructions": "Interpretation's recorded ambiguities: none identified. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
+      "instructions": "Interpretation's recorded ambiguities: none identified. Of these, 0 of 0 are marked CRITICAL (their answer would change what a required scenario must assert); the rest are non-critical and do not change any assertion. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
       "criteria": {
         "GENERATE_TESTS": "Interpretation identified no critical ambiguity and every rule BR01-BR06 states a concrete, testable outcome; generate scenarios now.",
         "REQUEST_CLARIFICATION": "Interpretation lists at least one critical ambiguity, or a rule's expected outcome cannot be asserted without a human answer."
@@ -299,7 +379,7 @@
     "question_name": "strategy_action",
     "question": {
       "type": "choice",
-      "instructions": "Interpretation's recorded ambiguities: AMB-01 (critical=False): Who is responsible for generating the idempotency key — the client/caller or the payment service itself? The text says a key 'must be included' but does not specify who produces it.; AMB-02 (critical=False): What is the TTL or expiry policy for an idempotency key? After what period, if any, may the same key be reused for a new logical payment?; AMB-03 (critical=False): BR02 references 'same payload' but BR03 only singles out 'different payment amount' as a rejection trigger. Does a mismatch in any non-amount payload field (e.g. currency, metadata, merchant ID) also cause a BR03-style rejection, or is it absorbed by BR02's idempotent resolution?. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
+      "instructions": "Interpretation's recorded ambiguities: AMB-01 (critical=False): Who is responsible for generating the idempotency key — the client/caller or the payment service itself? The text says a key 'must be included' but does not specify who produces it.; AMB-02 (critical=False): What is the TTL or expiry policy for an idempotency key? After what period, if any, may the same key be reused for a new logical payment?; AMB-03 (critical=False): BR02 references 'same payload' but BR03 only singles out 'different payment amount' as a rejection trigger. Does a mismatch in any non-amount payload field (e.g. currency, metadata, merchant ID) also cause a BR03-style rejection, or is it absorbed by BR02's idempotent resolution?. Of these, 0 of 3 are marked CRITICAL (their answer would change what a required scenario must assert); the rest are non-critical and do not change any assertion. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
       "criteria": {
         "GENERATE_TESTS": "Interpretation identified no critical ambiguity and every rule BR01-BR06 states a concrete, testable outcome; generate scenarios now.",
         "REQUEST_CLARIFICATION": "Interpretation lists at least one critical ambiguity, or a rule's expected outcome cannot be asserted without a human answer."
@@ -375,7 +455,7 @@
     "question_name": "strategy_action",
     "question": {
       "type": "choice",
-      "instructions": "Interpretation's recorded ambiguities: AMB-08 (critical=False): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined.; AMB-09 (critical=False): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence?; AMB-10 (critical=True): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
+      "instructions": "Interpretation's recorded ambiguities: AMB-08 (critical=False): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined.; AMB-09 (critical=False): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence?; AMB-10 (critical=True): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.. Of these, 1 of 3 are marked CRITICAL (their answer would change what a required scenario must assert); the rest are non-critical and do not change any assertion. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
       "criteria": {
         "GENERATE_TESTS": "Interpretation identified no critical ambiguity and every rule BR01-BR06 states a concrete, testable outcome; generate scenarios now.",
         "REQUEST_CLARIFICATION": "Interpretation lists at least one critical ambiguity, or a rule's expected outcome cannot be asserted without a human answer."
@@ -451,7 +531,7 @@
     "question_name": "strategy_action",
     "question": {
       "type": "choice",
-      "instructions": "Interpretation's recorded ambiguities: AMB-08 (critical=False): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined.; AMB-09 (critical=False): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence?; AMB-10 (critical=True): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.; AMB-Z1 (critical=True): Does dedup apply to partial refunds too?. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
+      "instructions": "Interpretation's recorded ambiguities: AMB-08 (critical=False): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined.; AMB-09 (critical=False): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence?; AMB-10 (critical=True): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.; AMB-Z1 (critical=True): Does dedup apply to partial refunds too?. Of these, 2 of 4 are marked CRITICAL (their answer would change what a required scenario must assert); the rest are non-critical and do not change any assertion. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
       "criteria": {
         "GENERATE_TESTS": "Interpretation identified no critical ambiguity and every rule BR01-BR06 states a concrete, testable outcome; generate scenarios now.",
         "REQUEST_CLARIFICATION": "Interpretation lists at least one critical ambiguity, or a rule's expected outcome cannot be asserted without a human answer."
@@ -529,16 +609,170 @@
     "label_rationale": "Two critical ambiguities are present; clarification should be requested before generating."
   },
   {
+    "item_id": "strategy_generate_held_out_br06_only",
+    "item_type": "single",
+    "question_type": "strategy_action",
+    "question_name": "strategy_action",
+    "question": {
+      "type": "choice",
+      "instructions": "Interpretation's recorded ambiguities: AMB-11 (critical=False): BR06 deduplicates callbacks by 'callback ID and payment ID'. Is the combination of both fields required for deduplication, or is callback ID alone sufficient?; AMB-12 (critical=False): BR06 covers re-delivery of a 'successful' callback. Does an equivalent deduplication rule apply to failed or refunded callbacks, or is the no-duplicate-posting rule intentionally limited to success callbacks only?. Of these, 0 of 2 are marked CRITICAL (their answer would change what a required scenario must assert); the rest are non-critical and do not change any assertion. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
+      "criteria": {
+        "GENERATE_TESTS": "Interpretation identified no critical ambiguity and every rule BR01-BR06 states a concrete, testable outcome; generate scenarios now.",
+        "REQUEST_CLARIFICATION": "Interpretation lists at least one critical ambiguity, or a rule's expected outcome cannot be asserted without a human answer."
+      }
+    },
+    "state": {
+      "rules": [
+        {
+          "rule_id": "BR01",
+          "source_excerpt": "Every payment request must include a unique idempotency key for its logical payment; retries reuse that key.",
+          "meaning": "Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one."
+        },
+        {
+          "rule_id": "BR02",
+          "source_excerpt": "Reusing the same key with the same payload resolves the original payment and must not create another charge.",
+          "meaning": "When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry."
+        },
+        {
+          "rule_id": "BR03",
+          "source_excerpt": "Reusing the same key with a different payment amount is rejected; the original charge and ledger remain unchanged.",
+          "meaning": "If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were."
+        },
+        {
+          "rule_id": "BR04",
+          "source_excerpt": "A timeout must not automatically mark the payment as failed. Retain its unresolved outcome until status verification or a callback establishes the result.",
+          "meaning": "When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome."
+        },
+        {
+          "rule_id": "BR05",
+          "source_excerpt": "Verify the original payment status before initiating another charge. If already successful, return the original result. If unresolved, do not create a new charge; retain the unresolved outcome until the scripted original success is available.",
+          "meaning": "Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered."
+        },
+        {
+          "rule_id": "BR06",
+          "source_excerpt": "Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting.",
+          "meaning": "When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment."
+        }
+      ],
+      "ambiguities": [
+        {
+          "id": "AMB-11",
+          "rule_id": "BR06",
+          "question": "BR06 deduplicates callbacks by 'callback ID and payment ID'. Is the combination of both fields required for deduplication, or is callback ID alone sufficient?",
+          "critical": false,
+          "status": "open",
+          "human_response": null
+        },
+        {
+          "id": "AMB-12",
+          "rule_id": "BR06",
+          "question": "BR06 covers re-delivery of a 'successful' callback. Does an equivalent deduplication rule apply to failed or refunded callbacks, or is the no-duplicate-posting rule intentionally limited to success callbacks only?",
+          "critical": false,
+          "status": "open",
+          "human_response": null
+        }
+      ]
+    },
+    "label": "GENERATE_TESTS",
+    "label_rationale": "Held out before wording was written. BR06's recorded ambiguities (AMB-11, AMB-12) are both non-critical; nothing blocks generation.",
+    "held_out": true
+  },
+  {
+    "item_id": "strategy_clarify_held_out_custom_critical",
+    "item_type": "single",
+    "question_type": "strategy_action",
+    "question_name": "strategy_action",
+    "question": {
+      "type": "choice",
+      "instructions": "Interpretation's recorded ambiguities: AMB-08 (critical=False): The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined.; AMB-09 (critical=False): BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence?; AMB-10 (critical=True): When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.; AMB-W1 (critical=True): What does 'verify authorization' mean operationally?. Of these, 2 of 4 are marked CRITICAL (their answer would change what a required scenario must assert); the rest are non-critical and do not change any assertion. Given the rules and these ambiguities, should the agent generate the scenario set now, or request human clarification first?",
+      "criteria": {
+        "GENERATE_TESTS": "Interpretation identified no critical ambiguity and every rule BR01-BR06 states a concrete, testable outcome; generate scenarios now.",
+        "REQUEST_CLARIFICATION": "Interpretation lists at least one critical ambiguity, or a rule's expected outcome cannot be asserted without a human answer."
+      }
+    },
+    "state": {
+      "rules": [
+        {
+          "rule_id": "BR01",
+          "source_excerpt": "Every payment request must include a unique idempotency key for its logical payment; retries reuse that key.",
+          "meaning": "Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one."
+        },
+        {
+          "rule_id": "BR02",
+          "source_excerpt": "Reusing the same key with the same payload resolves the original payment and must not create another charge.",
+          "meaning": "When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry."
+        },
+        {
+          "rule_id": "BR03",
+          "source_excerpt": "Reusing the same key with a different payment amount is rejected; the original charge and ledger remain unchanged.",
+          "meaning": "If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were."
+        },
+        {
+          "rule_id": "BR04",
+          "source_excerpt": "A timeout must not automatically mark the payment as failed. Retain its unresolved outcome until status verification or a callback establishes the result.",
+          "meaning": "When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome."
+        },
+        {
+          "rule_id": "BR05",
+          "source_excerpt": "Verify the original payment status before initiating another charge. If already successful, return the original result. If unresolved, do not create a new charge; retain the unresolved outcome until the scripted original success is available.",
+          "meaning": "Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered."
+        },
+        {
+          "rule_id": "BR06",
+          "source_excerpt": "Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting.",
+          "meaning": "When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment."
+        }
+      ],
+      "ambiguities": [
+        {
+          "id": "AMB-08",
+          "rule_id": "BR05",
+          "question": "The phrase 'scripted original success' in BR05 is unusual. Does 'scripted' mean the success outcome is deterministically pre-configured in a test fixture, or does it refer to a business-scripted retry workflow in production? This affects how unresolved-state termination is defined.",
+          "critical": false,
+          "status": "open",
+          "human_response": null
+        },
+        {
+          "id": "AMB-09",
+          "rule_id": "BR05",
+          "question": "BR05 says 'verify the original payment status before initiating another charge' — does this verification requirement apply only to the first retry, or to every retry attempt in a multi-retry sequence?",
+          "critical": false,
+          "status": "open",
+          "human_response": null
+        },
+        {
+          "id": "AMB-10",
+          "rule_id": "BR05",
+          "question": "When BR05 instructs the system to 'retain the unresolved outcome until the scripted original success is available', is the eventual delayed-success resolution triggered exclusively by a callback (BR06), or can a polling/status-verification call also resolve it? This distinction could affect S05's assertion on delayed_success_resolves_original.",
+          "critical": true,
+          "status": "open",
+          "human_response": null
+        },
+        {
+          "id": "AMB-W1",
+          "rule_id": "BRW",
+          "question": "What does 'verify authorization' mean operationally?",
+          "critical": true,
+          "status": "open",
+          "human_response": null
+        }
+      ]
+    },
+    "label": "REQUEST_CLARIFICATION",
+    "label_rationale": "Held out before wording was written. Two critical ambiguities (AMB-10, AMB-W1) are present; clarification should be requested.",
+    "held_out": true
+  },
+  {
     "item_id": "grounding_S01_clear_true",
     "item_type": "single",
     "question_type": "grounding_Sxx",
     "question_name": "grounding_S01",
     "question": {
       "type": "noul",
-      "instructions": "S01 ('Initial success') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.. Its structured oracle requires: gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S01 – Initial success\n  Given payment P-001 is associated with idempotency key K-001 and amount 100.00 USD\n  And the gateway fixture is scripted to return success\n  When the payment request is submitted with key K-001 for 100.00 USD\n  Then gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nDoes S01's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S01 ('Initial success') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.. Its structured oracle lists these required checks: gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S01 – Initial success\n  Given payment P-001 is associated with idempotency key K-001 and amount 100.00 USD\n  And the gateway fixture is scripted to return success\n  When the payment request is submitted with key K-001 for 100.00 USD\n  Then gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S01's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S01's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S01's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S01 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S01 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -580,10 +814,10 @@
     "question_name": "grounding_S02",
     "question": {
       "type": "noul",
-      "instructions": "S02 ('Timeout and identical retry') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle requires: timeout_not_failed EQ True; status_verification_before_retry_charge PRECEDES True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S02 – Timeout and identical retry\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  And status verification subsequently returns the original success\n  When the original payment is submitted with key K-001 for 100.00 USD and the gateway response times out\n  Then timeout_not_failed equals True\n  When an identical retry is submitted with the same key K-001 and same payload 100.00 USD\n  Then status verification is performed before any new gateway charge is attempted\n  And status_verification_before_retry_charge PRECEDES any new charge\n  And same_idempotency_key equals True\n  And same_payload equals True\n  And the status verification resolves to the original success — no new charge is issued\n  Then gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nDoes S02's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S02 ('Timeout and identical retry') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle lists these required checks: timeout_not_failed EQ True; status_verification_before_retry_charge PRECEDES True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S02 – Timeout and identical retry\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  And status verification subsequently returns the original success\n  When the original payment is submitted with key K-001 for 100.00 USD and the gateway response times out\n  Then timeout_not_failed equals True\n  When an identical retry is submitted with the same key K-001 and same payload 100.00 USD\n  Then status verification is performed before any new gateway charge is attempted\n  And status_verification_before_retry_charge PRECEDES any new charge\n  And same_idempotency_key equals True\n  And same_payload equals True\n  And the status verification resolves to the original success — no new charge is issued\n  Then gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S02's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S02's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S02's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S02 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S02 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -625,10 +859,10 @@
     "question_name": "grounding_S03",
     "question": {
       "type": "noul",
-      "instructions": "S03 ('Same key with conflicting amount') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.. Its structured oracle requires: conflict_rejected EQ True; original_financial_records_unchanged EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S03 – Same key with conflicting amount\n  Given key K-001 already identifies a successful 100.00 USD payment\n  And gateway_charge_count is 1 and ledger_success_count is 1\n  When a new payment request is submitted reusing key K-001 with a different amount (200.00 USD)\n  Then conflict_rejected equals True\n  And original_financial_records_unchanged equals True\n  And gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nDoes S03's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S03 ('Same key with conflicting amount') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.. Its structured oracle lists these required checks: conflict_rejected EQ True; original_financial_records_unchanged EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S03 – Same key with conflicting amount\n  Given key K-001 already identifies a successful 100.00 USD payment\n  And gateway_charge_count is 1 and ledger_success_count is 1\n  When a new payment request is submitted reusing key K-001 with a different amount (200.00 USD)\n  Then conflict_rejected equals True\n  And original_financial_records_unchanged equals True\n  And gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S03's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S03's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S03's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S03 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S03 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -670,10 +904,10 @@
     "question_name": "grounding_S05",
     "question": {
       "type": "noul",
-      "instructions": "S05 ('Delayed success after timeout') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle requires: timeout_not_failed EQ True; delayed_success_resolves_original EQ True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S05 – Delayed success after timeout\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  And the first status verification returns unresolved\n  And the original success callback is queued for later delivery\n  When the original payment is submitted with key K-001 for 100.00 USD and the gateway response times out\n  Then timeout_not_failed equals True\n  When an identical retry is submitted with the same key K-001 and same payload 100.00 USD\n  And status verification is performed before any new charge — result is unresolved\n  Then no new gateway charge is issued\n  And same_idempotency_key equals True\n  And same_payload equals True\n  And the system retains the unresolved outcome\n  When the queued original success callback is delivered\n  And the retry is resolved against the confirmed original success\n  Then delayed_success_resolves_original equals True\n  And gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nDoes S05's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S05 ('Delayed success after timeout') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle lists these required checks: timeout_not_failed EQ True; delayed_success_resolves_original EQ True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S05 – Delayed success after timeout\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  And the first status verification returns unresolved\n  And the original success callback is queued for later delivery\n  When the original payment is submitted with key K-001 for 100.00 USD and the gateway response times out\n  Then timeout_not_failed equals True\n  When an identical retry is submitted with the same key K-001 and same payload 100.00 USD\n  And status verification is performed before any new charge — result is unresolved\n  Then no new gateway charge is issued\n  And same_idempotency_key equals True\n  And same_payload equals True\n  And the system retains the unresolved outcome\n  When the queued original success callback is delivered\n  And the retry is resolved against the confirmed original success\n  Then delayed_success_resolves_original equals True\n  And gateway_charge_count equals 1\n  And ledger_success_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S05's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S05's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S05's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S05 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S05 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -715,10 +949,10 @@
     "question_name": "grounding_S01",
     "question": {
       "type": "noul",
-      "instructions": "S01 ('Initial success') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.. Its structured oracle requires: gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S01 – Initial success (weakened)\n  Given payment P-001 is associated with idempotency key K-001 and amount 100.00 USD\n  And the gateway fixture is scripted to return success\n  When the payment request is submitted with key K-001 for 100.00 USD\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nDoes S01's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S01 ('Initial success') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.. Its structured oracle lists these required checks: gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S01 – Initial success (weakened)\n  Given payment P-001 is associated with idempotency key K-001 and amount 100.00 USD\n  And the gateway fixture is scripted to return success\n  When the payment request is submitted with key K-001 for 100.00 USD\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S01's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S01's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S01's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S01 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S01 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -760,10 +994,10 @@
     "question_name": "grounding_S02",
     "question": {
       "type": "noul",
-      "instructions": "S02 ('Timeout and identical retry') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle requires: timeout_not_failed EQ True; status_verification_before_retry_charge PRECEDES True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S02 – Timeout and identical retry (weakened)\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  When an identical retry is submitted with the same key K-001 and same payload 100.00 USD\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nDoes S02's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S02 ('Timeout and identical retry') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle lists these required checks: timeout_not_failed EQ True; status_verification_before_retry_charge PRECEDES True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S02 – Timeout and identical retry (weakened)\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  When an identical retry is submitted with the same key K-001 and same payload 100.00 USD\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S02's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S02's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S02's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S02 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S02 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -805,10 +1039,10 @@
     "question_name": "grounding_S03",
     "question": {
       "type": "noul",
-      "instructions": "S03 ('Same key with conflicting amount') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.. Its structured oracle requires: conflict_rejected EQ True; original_financial_records_unchanged EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S03 – Same key with conflicting amount (weakened)\n  Given key K-001 already identifies a successful 100.00 USD payment\n  When a new payment request is submitted reusing key K-001 with a different amount (200.00 USD)\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nDoes S03's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S03 ('Same key with conflicting amount') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; If a request arrives with the same idempotency key as an existing payment but a different amount, the system must reject it with a conflict error. The original gateway charge count, ledger postings, payment state, amount, and currency must remain exactly as they were.. Its structured oracle lists these required checks: conflict_rejected EQ True; original_financial_records_unchanged EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S03 – Same key with conflicting amount (weakened)\n  Given key K-001 already identifies a successful 100.00 USD payment\n  When a new payment request is submitted reusing key K-001 with a different amount (200.00 USD)\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S03's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S03's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S03's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S03 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S03 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -850,10 +1084,10 @@
     "question_name": "grounding_S05",
     "question": {
       "type": "noul",
-      "instructions": "S05 ('Delayed success after timeout') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle requires: timeout_not_failed EQ True; delayed_success_resolves_original EQ True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S05 – Delayed success after timeout (weakened)\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  And the first status verification returns unresolved\n  When the queued original success callback is delivered\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nDoes S05's Given/When/Then above explicitly assert this same outcome -- no weaker, missing, or additional claim?",
+      "instructions": "S05 ('Delayed success after timeout') is linked to rule(s): Each distinct logical payment must be assigned a unique idempotency key at the time the payment request is first created. Any subsequent retry attempts for that same logical payment must reuse the identical key rather than generating a new one.; When a retry is submitted with the same idempotency key and an identical payload (including amount and currency) as the original request, the system must return the outcome of the original payment and must not issue a second charge or create a new ledger entry.; When the payment gateway times out, the system must not set the payment state to FAILED. The payment must remain in an unresolved state until either a proactive status verification call or an inbound callback definitively establishes the outcome.; Before attempting a new gateway charge on a retry, the system must first verify the current status of the original payment. If the original succeeded, return that result without charging again. If unresolved, hold the state and issue no new charge until the original success is eventually delivered.. Its structured oracle lists these required checks: timeout_not_failed EQ True; delayed_success_resolves_original EQ True; same_idempotency_key EQ True; same_payload EQ True; gateway_charge_count EQ 1; ledger_success_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S05 – Delayed success after timeout (weakened)\n  Given the original payment request with key K-001 commits one gateway charge but its response times out\n  And the first status verification returns unresolved\n  When the queued original success callback is delivered\n  Then gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S05's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
       "criteria": {
-        "true": "S05's Gherkin/prose asserts exactly the outcome its structured oracle (expected_assertions) and linked rule(s) require -- nothing extra, nothing missing, nothing weaker.",
-        "false": "S05's Gherkin/prose diverges from its structured oracle or linked rule(s) -- it asserts something different, weaker, or additional to what is actually required."
+        "true": "Every required check listed for S05 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S05 is missing, weaker, or contradicted by its Gherkin."
       }
     },
     "state": {
@@ -887,6 +1121,98 @@
     },
     "label": false,
     "label_rationale": "This Gherkin drops delayed_success_resolves_original and timeout_not_failed -- the two assertions that distinguish this from an ordinary success scenario."
+  },
+  {
+    "item_id": "grounding_S04_held_out_true",
+    "item_type": "single",
+    "question_type": "grounding_Sxx",
+    "question_name": "grounding_S04",
+    "question": {
+      "type": "noul",
+      "instructions": "S04 ('Duplicate successful callback') is linked to rule(s): When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment.. Its structured oracle lists these required checks: ledger_success_count EQ 1; gateway_charge_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S04 – Duplicate successful callback\n  Given callback C-001 for payment P-001 has already been processed once\n  And this has produced exactly one ledger success posting (ledger_success_count=1)\n  And exactly one gateway charge (gateway_charge_count=1)\n  And payment_state is 'SUCCESS' with amount 100.00 USD\n  When the identical success callback C-001 for payment P-001 is delivered again\n  Then the system identifies the re-delivery as a duplicate via the (callback ID, payment ID) composite key\n  And suppresses any additional ledger posting\n  And ledger_success_count equals 1\n  And gateway_charge_count equals 1\n  And payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S04's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
+      "criteria": {
+        "true": "Every required check listed for S04 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S04 is missing, weaker, or contradicted by its Gherkin."
+      }
+    },
+    "state": {
+      "validator_matrix": {
+        "covered": 5,
+        "required": 5,
+        "rows": [
+          {
+            "scenario_id": "S01",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S02",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S03",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S04",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S05",
+            "status": "VALID"
+          }
+        ],
+        "missing": []
+      }
+    },
+    "label": true,
+    "label_rationale": "Held out before wording was written. S04's real Gherkin (verbatim from scenarios_accepted.json) asserts exactly its own structured oracle (duplicate-callback suppression).",
+    "held_out": true
+  },
+  {
+    "item_id": "grounding_S04_held_out_false_weakened",
+    "item_type": "single",
+    "question_type": "grounding_Sxx",
+    "question_name": "grounding_S04",
+    "question": {
+      "type": "noul",
+      "instructions": "S04 ('Duplicate successful callback') is linked to rule(s): When the gateway re-delivers a success callback already processed (identified by callback ID + payment ID composite), the system must suppress any additional ledger posting, ensuring exactly one successful ledger entry exists for that payment.. Its structured oracle lists these required checks: ledger_success_count EQ 1; gateway_charge_count EQ 1; payment_state EQ 'SUCCESS'; amount EQ '100.00'; currency EQ 'USD'. Its Given/When/Then Gherkin is:\nScenario: S04 – Duplicate successful callback (weakened)\n  Given callback C-001 for payment P-001 has already been processed once\n  When the identical success callback C-001 for payment P-001 is delivered again\n  Then payment_state equals 'SUCCESS'\n  And amount equals '100.00'\n  And currency equals 'USD'\n\nCheck each required check listed above against the Gherkin text one at a time. Answer true only if S04's Gherkin explicitly covers every one of them with the same outcome; answer false if even one is missing, weaker, or contradicted.",
+      "criteria": {
+        "true": "Every required check listed for S04 is explicitly present in its Gherkin with the same outcome the oracle requires.",
+        "false": "At least one required check listed for S04 is missing, weaker, or contradicted by its Gherkin."
+      }
+    },
+    "state": {
+      "validator_matrix": {
+        "covered": 5,
+        "required": 5,
+        "rows": [
+          {
+            "scenario_id": "S01",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S02",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S03",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S04",
+            "status": "VALID"
+          },
+          {
+            "scenario_id": "S05",
+            "status": "VALID"
+          }
+        ],
+        "missing": []
+      }
+    },
+    "label": false,
+    "label_rationale": "Held out before wording was written. This Gherkin drops ledger_success_count and gateway_charge_count entirely -- the two assertions that actually prove the duplicate callback was suppressed rather than double-posted.",
+    "held_out": true
   },
   {
     "item_id": "coverage_accept_full_5_of_5",
@@ -1378,7 +1704,7 @@
     "question_name": "failure_action",
     "question": {
       "type": "choice",
-      "instructions": "Given this failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
+      "instructions": "T04 failed. Expected: 1 ledger entry. Actual: 2 ledger entries. Failure message: \"AssertionError: assert 2 == 1\\n +  where 2 = count_ledger_entries('P-001')\\n +    where count_ledger_entries = <ai_test_engineer.mock_payment.MockPaymentService object>.count_ledger_entries\". Linked rule: 'BR06: Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting.'. Evidence reference captured: True. Given this same failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
       "criteria": {
         "REPORT_FAILURE": "The evidence already clearly supports the classification and impact; report the defect now.",
         "INVESTIGATE_FAILURE": "One bounded, read-only look at the already-captured evidence would strengthen the report before it is finalized."
@@ -1408,7 +1734,7 @@
     "question_name": "failure_action",
     "question": {
       "type": "choice",
-      "instructions": "Given this failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
+      "instructions": "T03b failed. Expected: conflict_rejected == True, gateway_charge_count == 1. Actual: conflict_rejected == False, gateway_charge_count == 2. Failure message: 'AssertionError: assert False == True  -- conflicting request was accepted instead of rejected'. Linked rule: 'BR03: Reusing the same key with a different payment amount is rejected; the original charge and ledger remain unchanged.'. Evidence reference captured: True. Given this same failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
       "criteria": {
         "REPORT_FAILURE": "The evidence already clearly supports the classification and impact; report the defect now.",
         "INVESTIGATE_FAILURE": "One bounded, read-only look at the already-captured evidence would strengthen the report before it is finalized."
@@ -1438,7 +1764,7 @@
     "question_name": "failure_action",
     "question": {
       "type": "choice",
-      "instructions": "Given this failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
+      "instructions": "T10_incomplete failed. Expected: 1 ledger entry. Actual: 2 ledger entries. Failure message: 'AssertionError: assert 2 == 1'. Linked rule: 'BR06: Re-delivery of the same successful callback, identified by callback ID and payment ID, must not create another financial ledger posting.'. Evidence reference captured: False. Given this same failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
       "criteria": {
         "REPORT_FAILURE": "The evidence already clearly supports the classification and impact; report the defect now.",
         "INVESTIGATE_FAILURE": "One bounded, read-only look at the already-captured evidence would strengthen the report before it is finalized."
@@ -1468,7 +1794,7 @@
     "question_name": "failure_action",
     "question": {
       "type": "choice",
-      "instructions": "Given this failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
+      "instructions": "T11_incomplete failed. Expected: ledger_success_count == 1. Actual: ledger_success_count observed as either 1 or 2 depending on which log line is read -- the two log sources disagree. Failure message: 'AssertionError: assert ledger_success_count == 1 (log sources disagree on the actual value)'. Linked rule: 'BR02: Reusing the same key with the same payload resolves the original payment and must not create another charge.'. Evidence reference captured: True. Given this same failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
       "criteria": {
         "REPORT_FAILURE": "The evidence already clearly supports the classification and impact; report the defect now.",
         "INVESTIGATE_FAILURE": "One bounded, read-only look at the already-captured evidence would strengthen the report before it is finalized."
@@ -1492,13 +1818,75 @@
     "label_rationale": "Two log sources disagree on the actual value; one bounded read-only pass to reconcile them would strengthen the report before it is finalized."
   },
   {
+    "item_id": "failure_action_held_out_report_br01",
+    "item_type": "single",
+    "question_type": "failure_action",
+    "question_name": "failure_action",
+    "question": {
+      "type": "choice",
+      "instructions": "T12_held_out failed. Expected: retry reuses the original idempotency key K-001. Actual: retry generated a brand new idempotency key K-002 for the same logical payment. Failure message: \"AssertionError: assert 'K-002' == 'K-001'\". Linked rule: 'BR01: Every payment request must include a unique idempotency key for its logical payment; retries reuse that key.'. Evidence reference captured: True. Given this same failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
+      "criteria": {
+        "REPORT_FAILURE": "The evidence already clearly supports the classification and impact; report the defect now.",
+        "INVESTIGATE_FAILURE": "One bounded, read-only look at the already-captured evidence would strengthen the report before it is finalized."
+      }
+    },
+    "state": {
+      "failure_facts": {
+        "has_failure": true,
+        "test_id": "T12_held_out",
+        "rule_ids": [
+          "BR01"
+        ],
+        "rule_text": "BR01: Every payment request must include a unique idempotency key for its logical payment; retries reuse that key.",
+        "expected": "retry reuses the original idempotency key K-001",
+        "actual": "retry generated a brand new idempotency key K-002 for the same logical payment",
+        "failure_message": "AssertionError: assert 'K-002' == 'K-001'",
+        "evidence_reference": "execution/T12_evidence.json"
+      }
+    },
+    "label": "REPORT_FAILURE",
+    "label_rationale": "Held out before wording was written. Expected/actual and failure message are fully conclusive; nothing further to investigate.",
+    "held_out": true
+  },
+  {
+    "item_id": "failure_action_held_out_investigate_missing_message",
+    "item_type": "single",
+    "question_type": "failure_action",
+    "question_name": "failure_action",
+    "question": {
+      "type": "choice",
+      "instructions": "T13_held_out failed. Expected: conflict_rejected == True. Actual: conflict_rejected == True. Failure message: None. Linked rule: 'BR03: Reusing the same key with a different payment amount is rejected; the original charge and ledger remain unchanged.'. Evidence reference captured: True. Given this same failure, should the agent investigate further (one bounded, read-only pass over the existing evidence) or report the defect now? The agent never fixes code, never retries to green, and never reruns the suite.",
+      "criteria": {
+        "REPORT_FAILURE": "The evidence already clearly supports the classification and impact; report the defect now.",
+        "INVESTIGATE_FAILURE": "One bounded, read-only look at the already-captured evidence would strengthen the report before it is finalized."
+      }
+    },
+    "state": {
+      "failure_facts": {
+        "has_failure": true,
+        "test_id": "T13_held_out",
+        "rule_ids": [
+          "BR03"
+        ],
+        "rule_text": "BR03: Reusing the same key with a different payment amount is rejected; the original charge and ledger remain unchanged.",
+        "expected": "conflict_rejected == True",
+        "actual": "conflict_rejected == True",
+        "failure_message": null,
+        "evidence_reference": "execution/T13_evidence.json"
+      }
+    },
+    "label": "INVESTIGATE_FAILURE",
+    "label_rationale": "Held out before wording was written. Expected equals actual yet the runner marked this FAIL with no failure_message at all -- genuinely inconsistent evidence that warrants one bounded read-only look before reporting.",
+    "held_out": true
+  },
+  {
     "item_id": "completion_finalize_both_present",
     "item_type": "single",
     "question_type": "completion_action",
     "question_name": "completion_action",
     "question": {
       "type": "choice",
-      "instructions": "results.json present: True. analysis.json present: True. Is the evidence complete and consistent enough to finalize the report now?",
+      "instructions": "results.json present: True. analysis.json present: True. A test failure was recorded in results.json: True. Is the evidence complete and consistent enough to finalize the report now?",
       "criteria": {
         "FINALIZE_RESULTS": "All required evidence (results.json, and analysis.json if a test failed) is present and consistent; finalize now.",
         "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet."
@@ -1507,11 +1895,12 @@
     "state": {
       "completion_ready": {
         "results_exists": true,
-        "analysis_exists": true
+        "analysis_exists": true,
+        "has_failure": true
       }
     },
     "label": "FINALIZE_RESULTS",
-    "label_rationale": "Both results.json and analysis.json are present; evidence is complete."
+    "label_rationale": "Both results.json and analysis.json are present, and a failure was in fact recorded -- analysis.json was required and is there."
   },
   {
     "item_id": "completion_finalize_no_failure_no_analysis_needed",
@@ -1520,7 +1909,7 @@
     "question_name": "completion_action",
     "question": {
       "type": "choice",
-      "instructions": "results.json present: True. analysis.json present: True. Is the evidence complete and consistent enough to finalize the report now?",
+      "instructions": "results.json present: True. analysis.json present: False. A test failure was recorded in results.json: False. Is the evidence complete and consistent enough to finalize the report now?",
       "criteria": {
         "FINALIZE_RESULTS": "All required evidence (results.json, and analysis.json if a test failed) is present and consistent; finalize now.",
         "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet."
@@ -1529,11 +1918,12 @@
     "state": {
       "completion_ready": {
         "results_exists": true,
-        "analysis_exists": true
+        "analysis_exists": false,
+        "has_failure": false
       }
     },
     "label": "FINALIZE_RESULTS",
-    "label_rationale": "results.json present; analysis.json present (consistent even though this second sample assumes a run where a failure did occur and was analyzed)."
+    "label_rationale": "No failure occurred, so analysis.json is not required by FINALIZE_RESULTS' own criterion -- results.json alone is complete and consistent."
   },
   {
     "item_id": "completion_notready_analysis_missing",
@@ -1542,7 +1932,7 @@
     "question_name": "completion_action",
     "question": {
       "type": "choice",
-      "instructions": "results.json present: True. analysis.json present: False. Is the evidence complete and consistent enough to finalize the report now?",
+      "instructions": "results.json present: True. analysis.json present: False. A test failure was recorded in results.json: True. Is the evidence complete and consistent enough to finalize the report now?",
       "criteria": {
         "FINALIZE_RESULTS": "All required evidence (results.json, and analysis.json if a test failed) is present and consistent; finalize now.",
         "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet."
@@ -1551,11 +1941,12 @@
     "state": {
       "completion_ready": {
         "results_exists": true,
-        "analysis_exists": false
+        "analysis_exists": false,
+        "has_failure": true
       }
     },
     "label": "NOT_READY",
-    "label_rationale": "results.json is present but analysis.json is missing despite a recorded failure; evidence is incomplete."
+    "label_rationale": "A failure WAS recorded but analysis.json is missing -- unlike the no-failure case above, this is a real gap, not a non-requirement."
   },
   {
     "item_id": "completion_notready_results_missing",
@@ -1564,7 +1955,7 @@
     "question_name": "completion_action",
     "question": {
       "type": "choice",
-      "instructions": "results.json present: False. analysis.json present: False. Is the evidence complete and consistent enough to finalize the report now?",
+      "instructions": "results.json present: False. analysis.json present: False. A test failure was recorded in results.json: unknown. Is the evidence complete and consistent enough to finalize the report now?",
       "criteria": {
         "FINALIZE_RESULTS": "All required evidence (results.json, and analysis.json if a test failed) is present and consistent; finalize now.",
         "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet."
@@ -1573,11 +1964,60 @@
     "state": {
       "completion_ready": {
         "results_exists": false,
-        "analysis_exists": false
+        "analysis_exists": false,
+        "has_failure": "unknown"
       }
     },
     "label": "NOT_READY",
     "label_rationale": "results.json itself is missing; there is nothing to finalize yet."
+  },
+  {
+    "item_id": "completion_held_out_finalize_failure_analyzed",
+    "item_type": "single",
+    "question_type": "completion_action",
+    "question_name": "completion_action",
+    "question": {
+      "type": "choice",
+      "instructions": "results.json present: True. analysis.json present: True. A test failure was recorded in results.json: True. Is the evidence complete and consistent enough to finalize the report now?",
+      "criteria": {
+        "FINALIZE_RESULTS": "All required evidence (results.json, and analysis.json if a test failed) is present and consistent; finalize now.",
+        "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet."
+      }
+    },
+    "state": {
+      "completion_ready": {
+        "results_exists": true,
+        "analysis_exists": true,
+        "has_failure": true
+      }
+    },
+    "label": "FINALIZE_RESULTS",
+    "label_rationale": "Held out before wording was written. A failure was recorded and analysis.json exists; both required artifacts are present and consistent.",
+    "held_out": true
+  },
+  {
+    "item_id": "completion_held_out_notready_unknown_failure",
+    "item_type": "single",
+    "question_type": "completion_action",
+    "question_name": "completion_action",
+    "question": {
+      "type": "choice",
+      "instructions": "results.json present: True. analysis.json present: False. A test failure was recorded in results.json: unknown. Is the evidence complete and consistent enough to finalize the report now?",
+      "criteria": {
+        "FINALIZE_RESULTS": "All required evidence (results.json, and analysis.json if a test failed) is present and consistent; finalize now.",
+        "NOT_READY": "Required evidence is missing or inconsistent; do not finalize yet."
+      }
+    },
+    "state": {
+      "completion_ready": {
+        "results_exists": true,
+        "analysis_exists": false,
+        "has_failure": "unknown"
+      }
+    },
+    "label": "NOT_READY",
+    "label_rationale": "Held out before wording was written. Whether a failure even occurred is unknown (results.json exists but could not be read cleanly) and analysis.json is missing -- evidence completeness cannot be confirmed, so this must not finalize.",
+    "held_out": true
   },
   {
     "item_id": "replay_ambiguity_strategy_run_20261021_034730",
@@ -1782,7 +2222,7 @@
       "ambiguity_BR06": false,
       "strategy_action": "REQUEST_CLARIFICATION"
     },
-    "label_rationale": "Copied verbatim (state + all 7 questions, sent as one batched call) from the real AMBIGUITY+STRATEGY DECIDER record in runs/20261021T034730Z_f18751e6/decisions.json. Only BR05 has a genuinely critical ambiguity (AMB-10); BR04's live AUTO=True (confidence 0.8032) was wrong per this benchmark's label (Phase 1 finding 2) even though strategy_action's own REQUEST_CLARIFICATION choice was right, since BR05 alone already requires clarification.",
+    "label_rationale": "Copied verbatim (state + all 7 questions, sent as one batched call) from the real AMBIGUITY+STRATEGY DECIDER record in runs/20261021T034730Z_f18751e6/decisions.json. Only BR05 has a genuinely critical ambiguity (AMB-10); BR04's live AUTO=True (confidence 0.8032) was wrong per this benchmark's label (Phase 1 finding 2) even though strategy_action's own REQUEST_CLARIFICATION choice was right, since BR05 alone already requires clarification. Frozen with the OLD wording on purpose -- its live_confidence numbers are tied to this exact text; it is not updated when checkpoints.py's wording changes.",
     "live_reference": {
       "source_run": "runs/20261021T034730Z_f18751e6/decisions.json",
       "live_confidence": {
@@ -1885,7 +2325,7 @@
       "grounding_S05": true,
       "coverage_action": "REMEDIATE_GAP"
     },
-    "label_rationale": "Copied verbatim (state + all 5 questions, sent as one batched call) from the real COVERAGE DECIDER record in runs/20261021T034730Z_f18751e6/decisions.json, at scenario_set version 1 (S04 not yet generated). S01/S02/S03/S05's real Gherkin is faithful to their oracle (label True), yet the live call never auto-passed a single one (Phase 1 finding 1); coverage_action is REMEDIATE_GAP since S04/BR06 was MISSING -- correctly the live AUTO answer.",
+    "label_rationale": "Copied verbatim (state + all 5 questions, sent as one batched call) from the real COVERAGE DECIDER record in runs/20261021T034730Z_f18751e6/decisions.json, at scenario_set version 1 (S04 not yet generated). S01/S02/S03/S05's real Gherkin is faithful to their oracle (label True), yet the live call never auto-passed a single one (Phase 1 finding 1); coverage_action is REMEDIATE_GAP since S04/BR06 was MISSING -- correctly the live AUTO answer. Frozen with the OLD wording on purpose; see the ambiguity+strategy replay item's note.",
     "live_reference": {
       "source_run": "runs/20261021T034730Z_f18751e6/decisions.json",
       "live_confidence": {
@@ -1938,7 +2378,7 @@
       "failure_class": "BUSINESS_RULE_VIOLATION",
       "failure_action": "REPORT_FAILURE"
     },
-    "label_rationale": "Copied verbatim (state + both questions, sent as one batched call) from the real FAILURE DECIDER record. failure_class is correctly BUSINESS_RULE_VIOLATION (real T04 facts, fact-embedded instructions, live confidence ~0.7985, AUTO); failure_action is correctly REPORT_FAILURE (matches the real analysis.json's handling_action) but the live call's own self-reported confidence (~0.273) was far below its own top probability (~0.6365) and escalated anyway -- Phase 1 finding 3, generic unembedded instructions.",
+    "label_rationale": "Copied verbatim (state + both questions, sent as one batched call) from the real FAILURE DECIDER record. failure_class is correctly BUSINESS_RULE_VIOLATION (real T04 facts, fact-embedded instructions, live confidence ~0.7985, AUTO); failure_action is correctly REPORT_FAILURE (matches the real analysis.json's handling_action) but the live call's own self-reported confidence (~0.273) was far below its own top probability (~0.6365) and escalated anyway -- Phase 1 finding 3, generic unembedded instructions (now fixed in training item failure_action_report_t04_real, which embeds the same facts). Frozen with the OLD wording on purpose; see the ambiguity+strategy replay item's note.",
     "live_reference": {
       "source_run": "runs/20261021T034730Z_f18751e6/decisions.json",
       "live_confidence": {
