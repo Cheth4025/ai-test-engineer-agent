@@ -232,13 +232,18 @@ def can_execute(state: UIState, controller: RunController | None) -> bool:
 
 
 def pending_action_count(controller: RunController | None, versions: list[dict] | None = None) -> int:
-    """The Analysis nav badge count: 1 for a pending Decider escalation,
-    plus one per unresolved rule-match item on the LATEST scenario
-    version -- matches the mock's "1 Decider decision and 4 rule-match
-    checks" wording exactly. Never counts approval/execute-ready (those
-    badge Execution instead, via execution_pending_count)."""
+    """The Analysis nav badge count: 1 for a pending Decider escalation
+    routed to Analysis (generate_scenarios/save_scenario_set, per
+    PENDING_SECTION_FOR_TOOL) -- never a FAILURE/COMPLETION decision,
+    which renders inline on Execution instead -- plus one per unresolved
+    rule-match item on the LATEST scenario version, matching the mock's
+    "1 Decider decision and 4 rule-match checks" wording exactly. Never
+    counts approval/execute-ready (those badge Execution instead, via
+    execution_pending_count). Bug fixed here: this used to count ANY
+    pending_decision regardless of which page actually renders it."""
     count = 0
-    if controller is not None and controller.pending_decision is not None:
+    action = sidebar_pending_action(controller)
+    if action is not None and action["kind"] == "decision" and action["section_id"] == "analysis":
         count += 1
     if versions:
         count += len(versions[-1].get("unresolved_grounding") or [])
@@ -246,10 +251,20 @@ def pending_action_count(controller: RunController | None, versions: list[dict] 
 
 
 def execution_pending_count(controller: RunController | None) -> int:
-    """The Execution nav badge: 1 when approval or execute-ready is the
-    single pending action, else 0."""
+    """The Execution nav badge: 1 for approval/execute-ready, OR a pending
+    Decider escalation routed to Execution (finalize_analysis/
+    render_report, per PENDING_SECTION_FOR_TOOL) -- never an
+    Analysis-routed decision or a rule-match item (those badge Analysis
+    instead, via pending_action_count). Bug fixed here: a pending FAILURE/
+    COMPLETION decision badged neither page."""
     action = sidebar_pending_action(controller)
-    return 1 if action is not None and action["kind"] in ("approval", "execute_ready") else 0
+    if action is None:
+        return 0
+    if action["kind"] in ("approval", "execute_ready"):
+        return 1
+    if action["kind"] == "decision" and action["section_id"] == "execution":
+        return 1
+    return 0
 
 
 # ---------------------------------------------------------------------------

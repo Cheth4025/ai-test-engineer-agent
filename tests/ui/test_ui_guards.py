@@ -986,6 +986,16 @@ def test_pending_action_count_defaults_versions_to_empty():
     assert ui.pending_action_count(None) == 0
 
 
+@pytest.mark.parametrize("tool_name", ["finalize_analysis", "render_report"])
+def test_pending_action_count_zero_for_a_failure_completion_decision_pending(tmp_path, tool_name):
+    # bug: the Analysis badge counted ANY pending_decision, including a
+    # FAILURE/COMPLETION decision that actually renders (and is answered)
+    # on Execution -- PENDING_SECTION_FOR_TOOL already routes these to
+    # "execution"; the Analysis badge must not also count them.
+    controller = _controller_with_pending_decision(tmp_path, tool_name)
+    assert ui.pending_action_count(controller, []) == 0
+
+
 # ---------------------------------------------------------------------------
 # execution_pending_count -- the Execution nav badge: 1 when approval or
 # execute-ready is the pending action, else 0. Never counts an escalation
@@ -1010,9 +1020,18 @@ def test_execution_pending_count_one_when_execute_ready(tmp_path):
     assert ui.execution_pending_count(controller) == 1
 
 
-def test_execution_pending_count_zero_when_decision_pending_instead(tmp_path):
+def test_execution_pending_count_zero_when_an_analysis_routed_decision_is_pending_instead(tmp_path):
     controller = _controller_with_pending_decision(tmp_path, "save_scenario_set")
     assert ui.execution_pending_count(controller) == 0
+
+
+@pytest.mark.parametrize("tool_name", ["finalize_analysis", "render_report"])
+def test_execution_pending_count_one_for_a_failure_completion_decision_pending(tmp_path, tool_name):
+    # bug: the Execution badge only recognized approval/execute-ready, so a
+    # pending FAILURE/COMPLETION decision -- which renders inline on
+    # Execution, per PENDING_SECTION_FOR_TOOL -- badged neither page.
+    controller = _controller_with_pending_decision(tmp_path, tool_name)
+    assert ui.execution_pending_count(controller) == 1
 
 
 def test_execution_pending_count_zero_for_none_controller():
