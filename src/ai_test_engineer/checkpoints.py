@@ -25,6 +25,7 @@ drives the actual regeneration itself via _drive_recheck.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -151,20 +152,37 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
             a for a in _interpretation()["ambiguities"] if a["rule_id"] in (rule_id, "GENERAL")
         ]
 
+    def _critical_count(ambiguities: list[dict]) -> tuple[int, int]:
+        return sum(1 for a in ambiguities if a["critical"]), len(ambiguities)
+
+    # Phase 3 wording fix: ambiguity_BR04 scored "true" (ambiguous) live
+    # despite its own instructions already saying its ambiguities are
+    # non-critical/out-of-scope -- the model wasn't reliably weighting that
+    # qualifier. The CRITICAL tag below comes straight from
+    # interpret_requirement's own ambiguity extraction (it is not recomputed
+    # here), so this noul now effectively checks/confirms that upstream
+    # classification rather than judging ambiguity independently from
+    # scratch -- a real narrowing of what the question measures, called out
+    # here and in the fix's commit message rather than left implicit.
     def _ambiguity_lines_for_rule(rule_id: str) -> str:
         rule_ambiguities = _ambiguities_for_rule(rule_id)
         if not rule_ambiguities:
             return "No ambiguities recorded for this rule."
+        critical, total = _critical_count(rule_ambiguities)
         lines = [
-            f"{a['id']} (critical): {a['question']}"
+            f"{a['id']} (CRITICAL -- changes a required assertion): {a['question']}"
             if a["critical"]
             else (
                 f"{a['id']} (non-critical): {a['question']} -- recorded, out of scope for "
-                "S01-S05, does not change any assertion"
+                "S01-S05, does not change any assertion; its presence alone must NOT make "
+                "this rule ambiguous"
             )
             for a in rule_ambiguities
         ]
-        return "Known ambiguities for this rule: " + "; ".join(lines)
+        return (
+            f"{critical} of {total} recorded ambiguities for this rule are CRITICAL. "
+            "Known ambiguities for this rule: " + "; ".join(lines)
+        )
 
     def build_questions(state: Any) -> dict:
         questions = {
@@ -176,26 +194,29 @@ def build_generate_scenarios_checkpoint(attempt_log: AttemptLog, controller: Run
                 ),
                 "criteria": {
                     "true": (
-                        f"Rule {rule['rule_id']} ({rule['meaning']}) leaves a question whose "
-                        "answer would change what the test must assert -- e.g. which exact "
-                        "condition, value, or branch applies is not pinned down by the "
-                        "requirement text."
+                        f"Rule {rule['rule_id']} ({rule['meaning']}) has at least one ambiguity "
+                        "marked CRITICAL above -- its answer would change what a required "
+                        "scenario must assert. Non-critical open questions alone never make "
+                        "this answer true."
                     ),
                     "false": (
-                        f"Rule {rule['rule_id']} ({rule['meaning']}) is fully specified; "
-                        "nothing about it is unclear for writing a test that asserts the "
-                        "correct outcome."
+                        f"Rule {rule['rule_id']} ({rule['meaning']}) has no ambiguity marked "
+                        "CRITICAL above. Any recorded ambiguities are explicitly non-critical "
+                        "and do not change any required assertion."
                     ),
                 },
             }
             for rule in _rules()
         }
+        strategy_critical, strategy_total = _critical_count(_interpretation()["ambiguities"])
         questions["strategy_action"] = {
             "type": "choice",
             "instructions": (
-                f"Interpretation's recorded ambiguities: {_ambiguity_summary()}. Given the rules "
-                "and these ambiguities, should the agent generate the scenario set now, or "
-                "request human clarification first?"
+                f"Interpretation's recorded ambiguities: {_ambiguity_summary()}. Of these, "
+                f"{strategy_critical} of {strategy_total} are marked CRITICAL (their answer "
+                "would change what a required scenario must assert); the rest are non-critical "
+                "and do not change any assertion. Given the rules and these ambiguities, should "
+                "the agent generate the scenario set now, or request human clarification first?"
             ),
             "criteria": {
                 "GENERATE_TESTS": (
@@ -306,25 +327,29 @@ def build_coverage_checkpoint(
             # never left to the shared COVERAGE state alone -- a spike found
             # single-scenario grounding scored 0.88 on a correct S04 vs ~0.77
             # relying on shared state (see module docstring / review notes).
+            # Phase 3 wording fix: the old compound, triple-negative framing
+            # ("no weaker, missing, or additional claim") never scored above
+            # 0.75 live even for faithful scenarios. Reframed as an explicit
+            # per-check instruction -- same ground truth, clearer mechanics.
             questions[f"grounding_{row['scenario_id']}"] = {
                 "type": "noul",
                 "instructions": (
                     f"{row['scenario_id']} ('{scenario['title']}') is linked to rule(s): "
-                    f"{rule_meanings}. Its structured oracle requires: {assertions}. Its "
-                    f"Given/When/Then Gherkin is:\n{scenario['gherkin']}\n\n"
-                    f"Does {row['scenario_id']}'s Given/When/Then above explicitly assert "
-                    "this same outcome -- no weaker, missing, or additional claim?"
+                    f"{rule_meanings}. Its structured oracle lists these required checks: "
+                    f"{assertions}. Its Given/When/Then Gherkin is:\n{scenario['gherkin']}\n\n"
+                    f"Check each required check listed above against the Gherkin text one at "
+                    f"a time. Answer true only if {row['scenario_id']}'s Gherkin explicitly "
+                    "covers every one of them with the same outcome; answer false if even one "
+                    "is missing, weaker, or contradicted."
                 ),
                 "criteria": {
                     "true": (
-                        f"{row['scenario_id']}'s Gherkin/prose asserts exactly the outcome its "
-                        "structured oracle (expected_assertions) and linked rule(s) require -- "
-                        "nothing extra, nothing missing, nothing weaker."
+                        f"Every required check listed for {row['scenario_id']} is explicitly "
+                        "present in its Gherkin with the same outcome the oracle requires."
                     ),
                     "false": (
-                        f"{row['scenario_id']}'s Gherkin/prose diverges from its structured "
-                        "oracle or linked rule(s) -- it asserts something different, weaker, "
-                        "or additional to what is actually required."
+                        f"At least one required check listed for {row['scenario_id']} is "
+                        "missing, weaker, or contradicted by its Gherkin."
                     ),
                 },
             }
@@ -487,11 +512,19 @@ def build_failure_checkpoint(
             },
             "failure_action": {
                 "type": "choice",
+                # Phase 3 wording fix: this used to be generic boilerplate
+                # with none of the failure's own facts, unlike failure_class
+                # above (which embeds them and scores cleanly) -- live
+                # failure_action confidence (~0.27) diverged sharply from
+                # its own top probability (~0.65) and never auto'd.
                 "instructions": (
-                    "Given this failure, should the agent investigate further (one bounded, "
-                    "read-only pass over the existing evidence) or report the defect now? "
-                    "The agent never fixes code, never retries to green, and never reruns "
-                    "the suite."
+                    f"{facts['test_id']} failed. Expected: {facts['expected']}. Actual: "
+                    f"{facts['actual']}. Failure message: {facts['failure_message']!r}. "
+                    f"Linked rule: {facts['rule_text']!r}. Evidence reference captured: "
+                    f"{facts['evidence_reference'] is not None}. Given this same failure, "
+                    "should the agent investigate further (one bounded, read-only pass over "
+                    "the existing evidence) or report the defect now? The agent never fixes "
+                    "code, never retries to green, and never reruns the suite."
                 ),
                 "criteria": {
                     "REPORT_FAILURE": (
@@ -533,10 +566,25 @@ def build_failure_checkpoint(
 
 
 def build_completion_checkpoint(attempt_log: AttemptLog, controller: RunController, holder: dict) -> CheckpointSpec:
+    def _has_failure(results_path) -> bool | str:
+        """True/False when results.json exists and is well-formed; the
+        string "unknown" otherwise -- never crashes, and never silently
+        defaults to False (which would read as "no failure happened" and
+        could wrongly lean the question toward FINALIZE_RESULTS)."""
+        if not results_path.exists():
+            return "unknown"
+        try:
+            results = json.loads(results_path.read_text())
+            return any(t["status"] in ("FAIL", "ERROR") for t in results["tests"])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return "unknown"
+
     def _compute() -> dict:
+        results_path = controller.run_dir / "results.json"
         ready = {
-            "results_exists": (controller.run_dir / "results.json").exists(),
+            "results_exists": results_path.exists(),
             "analysis_exists": (controller.run_dir / "analysis.json").exists(),
+            "has_failure": _has_failure(results_path),
         }
         holder["completion_ready"] = ready
         return ready
@@ -546,10 +594,16 @@ def build_completion_checkpoint(attempt_log: AttemptLog, controller: RunControll
         return {
             "completion_action": {
                 "type": "choice",
+                # Phase 3 wording fix: this used to state only the two
+                # existence booleans, leaving "was analysis.json even
+                # supposed to exist" (per FINALIZE_RESULTS' own criterion,
+                # "...and analysis.json if a test failed") for the model to
+                # infer from context it doesn't have.
                 "instructions": (
                     f"results.json present: {ready['results_exists']}. analysis.json "
-                    f"present: {ready['analysis_exists']}. Is the evidence complete and "
-                    "consistent enough to finalize the report now?"
+                    f"present: {ready['analysis_exists']}. A test failure was recorded "
+                    f"in results.json: {ready['has_failure']}. Is the evidence complete "
+                    "and consistent enough to finalize the report now?"
                 ),
                 "criteria": {
                     "FINALIZE_RESULTS": (

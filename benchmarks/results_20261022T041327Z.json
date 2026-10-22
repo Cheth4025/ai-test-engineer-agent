@@ -1,0 +1,2638 @@
+{
+  "decider_results": [
+    {
+      "item_id": "ambiguity_br01_clear_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 1077,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR01",
+          "answer": false,
+          "confidence": 0.6124,
+          "probabilities": {
+            "true": 0.3876,
+            "false": 0.6124
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br02_clear_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 1000,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR02",
+          "answer": false,
+          "confidence": 0.6373,
+          "probabilities": {
+            "true": 0.3627,
+            "false": 0.6373
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br03_clear_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 1093,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR03",
+          "answer": false,
+          "confidence": 0.6892,
+          "probabilities": {
+            "true": 0.3108,
+            "false": 0.6892
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br05_clear_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 1406,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR05",
+          "answer": null,
+          "confidence": 0.5016,
+          "probabilities": {
+            "true": 0.5016,
+            "false": 0.49839999999999995
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_custom_vague_error_handling",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 593,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BRX",
+          "answer": null,
+          "confidence": 0.7556,
+          "probabilities": {
+            "true": 0.7556,
+            "false": 0.24439999999999995
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_custom_vague_reasonable_time",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 609,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BRY",
+          "answer": null,
+          "confidence": 0.7303,
+          "probabilities": {
+            "true": 0.7303,
+            "false": 0.26970000000000005
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br06_held_out_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 1015,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR06",
+          "answer": false,
+          "confidence": 0.6813,
+          "probabilities": {
+            "true": 0.3187,
+            "false": 0.6813
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_custom_held_out_authorization",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 625,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BRW",
+          "answer": null,
+          "confidence": 0.7567,
+          "probabilities": {
+            "true": 0.7567,
+            "false": 0.24329999999999996
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_generate_no_ambiguities",
+      "question_type": "strategy_action",
+      "latency_ms": 1125,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "GENERATE_TESTS",
+          "confidence": 0.8771,
+          "probabilities": {
+            "GENERATE_TESTS": 0.9386,
+            "REQUEST_CLARIFICATION": 0.0614
+          },
+          "route": "AUTO",
+          "suggestion": "GENERATE_TESTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_generate_only_noncritical",
+      "question_type": "strategy_action",
+      "latency_ms": 1734,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": null,
+          "confidence": 0.0543,
+          "probabilities": {
+            "GENERATE_TESTS": 0.5272,
+            "REQUEST_CLARIFICATION": 0.4728
+          },
+          "route": "ESCALATE",
+          "suggestion": "GENERATE_TESTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_clarify_one_critical",
+      "question_type": "strategy_action",
+      "latency_ms": 1765,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": null,
+          "confidence": 0.6229,
+          "probabilities": {
+            "GENERATE_TESTS": 0.1886,
+            "REQUEST_CLARIFICATION": 0.8114
+          },
+          "route": "ESCALATE",
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_clarify_two_critical",
+      "question_type": "strategy_action",
+      "latency_ms": 1968,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": null,
+          "confidence": 0.6332,
+          "probabilities": {
+            "GENERATE_TESTS": 0.1834,
+            "REQUEST_CLARIFICATION": 0.8166
+          },
+          "route": "ESCALATE",
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_generate_held_out_br06_only",
+      "question_type": "strategy_action",
+      "latency_ms": 1516,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": null,
+          "confidence": 0.052,
+          "probabilities": {
+            "GENERATE_TESTS": 0.474,
+            "REQUEST_CLARIFICATION": 0.526
+          },
+          "route": "ESCALATE",
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_clarify_held_out_custom_critical",
+      "question_type": "strategy_action",
+      "latency_ms": 1937,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": null,
+          "confidence": 0.658,
+          "probabilities": {
+            "GENERATE_TESTS": 0.171,
+            "REQUEST_CLARIFICATION": 0.829
+          },
+          "route": "ESCALATE",
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S01_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 781,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S01",
+          "answer": null,
+          "confidence": 0.5005,
+          "probabilities": {
+            "true": 0.4995,
+            "false": 0.5005
+          },
+          "route": "ESCALATE",
+          "suggestion": false,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S02_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1452,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S02",
+          "answer": null,
+          "confidence": 0.5964,
+          "probabilities": {
+            "true": 0.5964,
+            "false": 0.40359999999999996
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S03_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1031,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S03",
+          "answer": false,
+          "confidence": 0.6138,
+          "probabilities": {
+            "true": 0.3862,
+            "false": 0.6138
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S05_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1187,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S05",
+          "answer": null,
+          "confidence": 0.6391,
+          "probabilities": {
+            "true": 0.6391,
+            "false": 0.3609
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S01_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 764,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S01",
+          "answer": null,
+          "confidence": 0.5734,
+          "probabilities": {
+            "true": 0.4266,
+            "false": 0.5734
+          },
+          "route": "ESCALATE",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S02_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1016,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S02",
+          "answer": false,
+          "confidence": 0.6823,
+          "probabilities": {
+            "true": 0.3177,
+            "false": 0.6823
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S03_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 843,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S03",
+          "answer": false,
+          "confidence": 0.7557,
+          "probabilities": {
+            "true": 0.2443,
+            "false": 0.7557
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S05_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 953,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S05",
+          "answer": null,
+          "confidence": 0.5977,
+          "probabilities": {
+            "true": 0.4023,
+            "false": 0.5977
+          },
+          "route": "ESCALATE",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S04_held_out_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 843,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S04",
+          "answer": null,
+          "confidence": 0.5336,
+          "probabilities": {
+            "true": 0.5336,
+            "false": 0.46640000000000004
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S04_held_out_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 796,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S04",
+          "answer": false,
+          "confidence": 0.6838,
+          "probabilities": {
+            "true": 0.3162,
+            "false": 0.6838
+          },
+          "route": "AUTO",
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_accept_full_5_of_5",
+      "question_type": "coverage_action",
+      "latency_ms": 453,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "ACCEPT_COVERAGE",
+          "confidence": 0.8695,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.9348,
+            "REMEDIATE_GAP": 0.0652
+          },
+          "route": "AUTO",
+          "suggestion": "ACCEPT_COVERAGE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_accept_full_5_of_5_again",
+      "question_type": "coverage_action",
+      "latency_ms": 452,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "ACCEPT_COVERAGE",
+          "confidence": 0.8695,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.9348,
+            "REMEDIATE_GAP": 0.0652
+          },
+          "route": "AUTO",
+          "suggestion": "ACCEPT_COVERAGE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_accept_full_rebuilt",
+      "question_type": "coverage_action",
+      "latency_ms": 514,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "ACCEPT_COVERAGE",
+          "confidence": 0.8695,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.9348,
+            "REMEDIATE_GAP": 0.0652
+          },
+          "route": "AUTO",
+          "suggestion": "ACCEPT_COVERAGE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_remediate_s04_missing",
+      "question_type": "coverage_action",
+      "latency_ms": 516,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": null,
+          "confidence": 0.7014,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.1493,
+            "REMEDIATE_GAP": 0.8507
+          },
+          "route": "ESCALATE",
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_remediate_s02_invalid",
+      "question_type": "coverage_action",
+      "latency_ms": 547,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": null,
+          "confidence": 0.6982,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.1509,
+            "REMEDIATE_GAP": 0.8491
+          },
+          "route": "ESCALATE",
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_remediate_two_missing",
+      "question_type": "coverage_action",
+      "latency_ms": 608,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": null,
+          "confidence": 0.7285,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.1357,
+            "REMEDIATE_GAP": 0.8643
+          },
+          "route": "ESCALATE",
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_brv_t04_real",
+      "question_type": "failure_class",
+      "latency_ms": 641,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "BUSINESS_RULE_VIOLATION",
+          "confidence": 0.8007,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.8671,
+            "INFRASTRUCTURE_ERROR": 0.0916,
+            "INSUFFICIENT_EVIDENCE": 0.0413
+          },
+          "route": "AUTO",
+          "suggestion": "BUSINESS_RULE_VIOLATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_brv_br03_hand_built",
+      "question_type": "failure_class",
+      "latency_ms": 733,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "BUSINESS_RULE_VIOLATION",
+          "confidence": 0.8355,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.8903,
+            "INFRASTRUCTURE_ERROR": 0.0723,
+            "INSUFFICIENT_EVIDENCE": 0.0374
+          },
+          "route": "AUTO",
+          "suggestion": "BUSINESS_RULE_VIOLATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_infra_connection_error",
+      "question_type": "failure_class",
+      "latency_ms": 485,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "INFRASTRUCTURE_ERROR",
+          "confidence": 0.8648,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.0494,
+            "INFRASTRUCTURE_ERROR": 0.9098,
+            "INSUFFICIENT_EVIDENCE": 0.0407
+          },
+          "route": "AUTO",
+          "suggestion": "INFRASTRUCTURE_ERROR",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_infra_fixture_setup",
+      "question_type": "failure_class",
+      "latency_ms": 592,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "INFRASTRUCTURE_ERROR",
+          "confidence": 0.7794,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.1053,
+            "INFRASTRUCTURE_ERROR": 0.8529,
+            "INSUFFICIENT_EVIDENCE": 0.0418
+          },
+          "route": "AUTO",
+          "suggestion": "INFRASTRUCTURE_ERROR",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_insufficient_missing_values",
+      "question_type": "failure_class",
+      "latency_ms": 532,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": null,
+          "confidence": 0.2224,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.3423,
+            "INFRASTRUCTURE_ERROR": 0.1761,
+            "INSUFFICIENT_EVIDENCE": 0.4816
+          },
+          "route": "ESCALATE",
+          "suggestion": "INSUFFICIENT_EVIDENCE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_insufficient_empty_evidence",
+      "question_type": "failure_class",
+      "latency_ms": 608,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": null,
+          "confidence": 0.0725,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.3292,
+            "INFRASTRUCTURE_ERROR": 0.3817,
+            "INSUFFICIENT_EVIDENCE": 0.2891
+          },
+          "route": "ESCALATE",
+          "suggestion": "INFRASTRUCTURE_ERROR",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_report_t04_real",
+      "question_type": "failure_action",
+      "latency_ms": 625,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.3418,
+          "probabilities": {
+            "REPORT_FAILURE": 0.6709,
+            "INVESTIGATE_FAILURE": 0.3291
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_report_br03_conclusive",
+      "question_type": "failure_action",
+      "latency_ms": 625,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.523,
+          "probabilities": {
+            "REPORT_FAILURE": 0.7615,
+            "INVESTIGATE_FAILURE": 0.2385
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_investigate_missing_evidence_ref",
+      "question_type": "failure_action",
+      "latency_ms": 718,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.3511,
+          "probabilities": {
+            "REPORT_FAILURE": 0.6756,
+            "INVESTIGATE_FAILURE": 0.3244
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_investigate_conflicting_logs",
+      "question_type": "failure_action",
+      "latency_ms": 703,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.209,
+          "probabilities": {
+            "REPORT_FAILURE": 0.6045,
+            "INVESTIGATE_FAILURE": 0.3955
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_held_out_report_br01",
+      "question_type": "failure_action",
+      "latency_ms": 718,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.5428,
+          "probabilities": {
+            "REPORT_FAILURE": 0.7714,
+            "INVESTIGATE_FAILURE": 0.2286
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_held_out_investigate_missing_message",
+      "question_type": "failure_action",
+      "latency_ms": 608,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.4914,
+          "probabilities": {
+            "REPORT_FAILURE": 0.7457,
+            "INVESTIGATE_FAILURE": 0.2543
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "completion_finalize_both_present",
+      "question_type": "completion_action",
+      "latency_ms": 422,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "FINALIZE_RESULTS",
+          "confidence": 0.8462,
+          "probabilities": {
+            "FINALIZE_RESULTS": 0.9231,
+            "NOT_READY": 0.0769
+          },
+          "route": "AUTO",
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_finalize_no_failure_no_analysis_needed",
+      "question_type": "completion_action",
+      "latency_ms": 296,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": null,
+          "confidence": 0.1899,
+          "probabilities": {
+            "FINALIZE_RESULTS": 0.5949,
+            "NOT_READY": 0.4051
+          },
+          "route": "ESCALATE",
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_notready_analysis_missing",
+      "question_type": "completion_action",
+      "latency_ms": 312,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": null,
+          "confidence": 0.1334,
+          "probabilities": {
+            "FINALIZE_RESULTS": 0.5667,
+            "NOT_READY": 0.4333
+          },
+          "route": "ESCALATE",
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "completion_notready_results_missing",
+      "question_type": "completion_action",
+      "latency_ms": 312,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": null,
+          "confidence": 0.7471,
+          "probabilities": {
+            "FINALIZE_RESULTS": 0.1265,
+            "NOT_READY": 0.8735
+          },
+          "route": "ESCALATE",
+          "suggestion": "NOT_READY",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_held_out_finalize_failure_analyzed",
+      "question_type": "completion_action",
+      "latency_ms": 406,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "FINALIZE_RESULTS",
+          "confidence": 0.8462,
+          "probabilities": {
+            "FINALIZE_RESULTS": 0.9231,
+            "NOT_READY": 0.0769
+          },
+          "route": "AUTO",
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_held_out_notready_unknown_failure",
+      "question_type": "completion_action",
+      "latency_ms": 343,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": null,
+          "confidence": 0.0962,
+          "probabilities": {
+            "FINALIZE_RESULTS": 0.4519,
+            "NOT_READY": 0.5481
+          },
+          "route": "ESCALATE",
+          "suggestion": "NOT_READY",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+      "question_type": "replay_AMBIGUITY_STRATEGY",
+      "latency_ms": 10453,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR01",
+          "answer": null,
+          "confidence": 0.7125,
+          "probabilities": {
+            "true": 0.7125,
+            "false": 0.2875
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": false
+        },
+        {
+          "question_name": "ambiguity_BR02",
+          "answer": null,
+          "confidence": 0.7047,
+          "probabilities": {
+            "true": 0.7047,
+            "false": 0.2953
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": false
+        },
+        {
+          "question_name": "ambiguity_BR03",
+          "answer": null,
+          "confidence": 0.7153,
+          "probabilities": {
+            "true": 0.7153,
+            "false": 0.28469999999999995
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": false
+        },
+        {
+          "question_name": "ambiguity_BR04",
+          "answer": null,
+          "confidence": 0.7798,
+          "probabilities": {
+            "true": 0.7798,
+            "false": 0.22019999999999995
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": false
+        },
+        {
+          "question_name": "ambiguity_BR05",
+          "answer": true,
+          "confidence": 0.8673,
+          "probabilities": {
+            "true": 0.8673,
+            "false": 0.13270000000000004
+          },
+          "route": "AUTO",
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "ambiguity_BR06",
+          "answer": null,
+          "confidence": 0.7585,
+          "probabilities": {
+            "true": 0.7585,
+            "false": 0.24150000000000005
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": false
+        },
+        {
+          "question_name": "strategy_action",
+          "answer": "REQUEST_CLARIFICATION",
+          "confidence": 0.8429,
+          "probabilities": {
+            "GENERATE_TESTS": 0.0786,
+            "REQUEST_CLARIFICATION": 0.9214
+          },
+          "route": "AUTO",
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "replay_coverage_run_20261021_034730",
+      "question_type": "replay_COVERAGE",
+      "latency_ms": 5000,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S01",
+          "answer": null,
+          "confidence": 0.5109,
+          "probabilities": {
+            "true": 0.5109,
+            "false": 0.4891
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "grounding_S02",
+          "answer": null,
+          "confidence": 0.6939,
+          "probabilities": {
+            "true": 0.6939,
+            "false": 0.30610000000000004
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "grounding_S03",
+          "answer": null,
+          "confidence": 0.5004,
+          "probabilities": {
+            "true": 0.4996,
+            "false": 0.5004
+          },
+          "route": "ESCALATE",
+          "suggestion": false,
+          "correct": false
+        },
+        {
+          "question_name": "grounding_S05",
+          "answer": null,
+          "confidence": 0.6923,
+          "probabilities": {
+            "true": 0.6923,
+            "false": 0.3077
+          },
+          "route": "ESCALATE",
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "coverage_action",
+          "answer": null,
+          "confidence": 0.6954,
+          "probabilities": {
+            "ACCEPT_COVERAGE": 0.1523,
+            "REMEDIATE_GAP": 0.8477
+          },
+          "route": "ESCALATE",
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "replay_failure_run_20261021_034730",
+      "question_type": "replay_FAILURE",
+      "latency_ms": 1000,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "BUSINESS_RULE_VIOLATION",
+          "confidence": 0.7977,
+          "probabilities": {
+            "BUSINESS_RULE_VIOLATION": 0.8651,
+            "INFRASTRUCTURE_ERROR": 0.0931,
+            "INSUFFICIENT_EVIDENCE": 0.0418
+          },
+          "route": "AUTO",
+          "suggestion": "BUSINESS_RULE_VIOLATION",
+          "correct": true
+        },
+        {
+          "question_name": "failure_action",
+          "answer": null,
+          "confidence": 0.2656,
+          "probabilities": {
+            "REPORT_FAILURE": 0.6328,
+            "INVESTIGATE_FAILURE": 0.3672
+          },
+          "route": "ESCALATE",
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    }
+  ],
+  "bedrock_results": [
+    {
+      "item_id": "ambiguity_br01_clear_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 1406,
+      "input_tokens": 682,
+      "output_tokens": 24,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR01",
+          "answer": false,
+          "confidence": 1.0,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br02_clear_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 812,
+      "input_tokens": 584,
+      "output_tokens": 24,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR02",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br03_clear_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 906,
+      "input_tokens": 715,
+      "output_tokens": 24,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR03",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br05_clear_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 764,
+      "input_tokens": 1001,
+      "output_tokens": 24,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR05",
+          "answer": true,
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_custom_vague_error_handling",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 906,
+      "input_tokens": 389,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BRX",
+          "answer": true,
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_custom_vague_reasonable_time",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 2359,
+      "input_tokens": 393,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BRY",
+          "answer": true,
+          "confidence": 1.0,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_br06_held_out_not_ambiguous",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 812,
+      "input_tokens": 685,
+      "output_tokens": 24,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR06",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "ambiguity_custom_held_out_authorization",
+      "question_type": "ambiguity_BRxx",
+      "latency_ms": 3406,
+      "input_tokens": 397,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BRW",
+          "answer": true,
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_generate_no_ambiguities",
+      "question_type": "strategy_action",
+      "latency_ms": 796,
+      "input_tokens": 882,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "GENERATE_TESTS",
+          "confidence": 1.0,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "GENERATE_TESTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_generate_only_noncritical",
+      "question_type": "strategy_action",
+      "latency_ms": 3094,
+      "input_tokens": 1395,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "GENERATE_TESTS",
+          "confidence": 0.85,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "GENERATE_TESTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_clarify_one_critical",
+      "question_type": "strategy_action",
+      "latency_ms": 796,
+      "input_tokens": 1447,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "REQUEST_CLARIFICATION",
+          "confidence": 0.85,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_clarify_two_critical",
+      "question_type": "strategy_action",
+      "latency_ms": 906,
+      "input_tokens": 1539,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "REQUEST_CLARIFICATION",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_generate_held_out_br06_only",
+      "question_type": "strategy_action",
+      "latency_ms": 827,
+      "input_tokens": 1185,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "GENERATE_TESTS",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "GENERATE_TESTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "strategy_clarify_held_out_custom_critical",
+      "question_type": "strategy_action",
+      "latency_ms": 2860,
+      "input_tokens": 1544,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "strategy_action",
+          "answer": "REQUEST_CLARIFICATION",
+          "confidence": 0.85,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S01_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 828,
+      "input_tokens": 604,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S01",
+          "answer": true,
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S02_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 811,
+      "input_tokens": 914,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S02",
+          "answer": true,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S03_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 813,
+      "input_tokens": 713,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S03",
+          "answer": true,
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S05_clear_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 827,
+      "input_tokens": 950,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S05",
+          "answer": true,
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S01_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 812,
+      "input_tokens": 577,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S01",
+          "answer": false,
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S02_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1343,
+      "input_tokens": 769,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S02",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S03_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1625,
+      "input_tokens": 644,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S03",
+          "answer": false,
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S05_clear_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1077,
+      "input_tokens": 764,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S05",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S04_held_out_true",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 1110,
+      "input_tokens": 674,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S04",
+          "answer": true,
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "grounding_S04_held_out_false_weakened",
+      "question_type": "grounding_Sxx",
+      "latency_ms": 889,
+      "input_tokens": 564,
+      "output_tokens": 23,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S04",
+          "answer": false,
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_accept_full_5_of_5",
+      "question_type": "coverage_action",
+      "latency_ms": 828,
+      "input_tokens": 323,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "ACCEPT_COVERAGE",
+          "confidence": 1.0,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "ACCEPT_COVERAGE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_accept_full_5_of_5_again",
+      "question_type": "coverage_action",
+      "latency_ms": 1016,
+      "input_tokens": 323,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "ACCEPT_COVERAGE",
+          "confidence": 1.0,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "ACCEPT_COVERAGE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_accept_full_rebuilt",
+      "question_type": "coverage_action",
+      "latency_ms": 1125,
+      "input_tokens": 323,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "ACCEPT_COVERAGE",
+          "confidence": 1.0,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "ACCEPT_COVERAGE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_remediate_s04_missing",
+      "question_type": "coverage_action",
+      "latency_ms": 827,
+      "input_tokens": 360,
+      "output_tokens": 27,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "REMEDIATE_GAP",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_remediate_s02_invalid",
+      "question_type": "coverage_action",
+      "latency_ms": 797,
+      "input_tokens": 378,
+      "output_tokens": 27,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "REMEDIATE_GAP",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "coverage_remediate_two_missing",
+      "question_type": "coverage_action",
+      "latency_ms": 1468,
+      "input_tokens": 400,
+      "output_tokens": 27,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "coverage_action",
+          "answer": "REMEDIATE_GAP",
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_brv_t04_real",
+      "question_type": "failure_class",
+      "latency_ms": 906,
+      "input_tokens": 476,
+      "output_tokens": 29,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "BUSINESS_RULE_VIOLATION",
+          "confidence": 0.98,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "BUSINESS_RULE_VIOLATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_brv_br03_hand_built",
+      "question_type": "failure_class",
+      "latency_ms": 1125,
+      "input_tokens": 411,
+      "output_tokens": 29,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "BUSINESS_RULE_VIOLATION",
+          "confidence": 0.98,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "BUSINESS_RULE_VIOLATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_infra_connection_error",
+      "question_type": "failure_class",
+      "latency_ms": 1125,
+      "input_tokens": 334,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "INFRASTRUCTURE_ERROR",
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "INFRASTRUCTURE_ERROR",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_infra_fixture_setup",
+      "question_type": "failure_class",
+      "latency_ms": 921,
+      "input_tokens": 348,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "INFRASTRUCTURE_ERROR",
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "INFRASTRUCTURE_ERROR",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_insufficient_missing_values",
+      "question_type": "failure_class",
+      "latency_ms": 1437,
+      "input_tokens": 393,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "INSUFFICIENT_EVIDENCE",
+          "confidence": 0.85,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "INSUFFICIENT_EVIDENCE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_class_insufficient_empty_evidence",
+      "question_type": "failure_class",
+      "latency_ms": 812,
+      "input_tokens": 464,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "INSUFFICIENT_EVIDENCE",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "INSUFFICIENT_EVIDENCE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_report_t04_real",
+      "question_type": "failure_action",
+      "latency_ms": 750,
+      "input_tokens": 516,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": "REPORT_FAILURE",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_report_br03_conclusive",
+      "question_type": "failure_action",
+      "latency_ms": 781,
+      "input_tokens": 451,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": "REPORT_FAILURE",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_investigate_missing_evidence_ref",
+      "question_type": "failure_action",
+      "latency_ms": 922,
+      "input_tokens": 402,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": "REPORT_FAILURE",
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REPORT_FAILURE",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_investigate_conflicting_logs",
+      "question_type": "failure_action",
+      "latency_ms": 921,
+      "input_tokens": 485,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": "INVESTIGATE_FAILURE",
+          "confidence": 0.82,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "INVESTIGATE_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_held_out_report_br01",
+      "question_type": "failure_action",
+      "latency_ms": 828,
+      "input_tokens": 465,
+      "output_tokens": 26,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": "REPORT_FAILURE",
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "failure_action_held_out_investigate_missing_message",
+      "question_type": "failure_action",
+      "latency_ms": 2358,
+      "input_tokens": 381,
+      "output_tokens": 151,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_action",
+          "answer": "INVESTIGATE_FAILURE",
+          "confidence": 0.82,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "INVESTIGATE_FAILURE",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_finalize_both_present",
+      "question_type": "completion_action",
+      "latency_ms": 921,
+      "input_tokens": 203,
+      "output_tokens": 27,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "FINALIZE_RESULTS",
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_finalize_no_failure_no_analysis_needed",
+      "question_type": "completion_action",
+      "latency_ms": 828,
+      "input_tokens": 203,
+      "output_tokens": 27,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "FINALIZE_RESULTS",
+          "confidence": 0.9,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_notready_analysis_missing",
+      "question_type": "completion_action",
+      "latency_ms": 968,
+      "input_tokens": 203,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "NOT_READY",
+          "confidence": 0.85,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "NOT_READY",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_notready_results_missing",
+      "question_type": "completion_action",
+      "latency_ms": 952,
+      "input_tokens": 204,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "NOT_READY",
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "NOT_READY",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_held_out_finalize_failure_analyzed",
+      "question_type": "completion_action",
+      "latency_ms": 922,
+      "input_tokens": 203,
+      "output_tokens": 27,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "FINALIZE_RESULTS",
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "FINALIZE_RESULTS",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "completion_held_out_notready_unknown_failure",
+      "question_type": "completion_action",
+      "latency_ms": 922,
+      "input_tokens": 204,
+      "output_tokens": 25,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "completion_action",
+          "answer": "NOT_READY",
+          "confidence": 0.7,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "NOT_READY",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+      "question_type": "replay_AMBIGUITY_STRATEGY",
+      "latency_ms": 1483,
+      "input_tokens": 4365,
+      "output_tokens": 152,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "ambiguity_BR01",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        },
+        {
+          "question_name": "ambiguity_BR02",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        },
+        {
+          "question_name": "ambiguity_BR03",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        },
+        {
+          "question_name": "ambiguity_BR04",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        },
+        {
+          "question_name": "ambiguity_BR05",
+          "answer": true,
+          "confidence": 0.92,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "ambiguity_BR06",
+          "answer": false,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": false,
+          "correct": true
+        },
+        {
+          "question_name": "strategy_action",
+          "answer": "REQUEST_CLARIFICATION",
+          "confidence": 0.88,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REQUEST_CLARIFICATION",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "replay_coverage_run_20261021_034730",
+      "question_type": "replay_COVERAGE",
+      "latency_ms": 1312,
+      "input_tokens": 2365,
+      "output_tokens": 107,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "grounding_S01",
+          "answer": true,
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "grounding_S02",
+          "answer": true,
+          "confidence": 0.93,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "grounding_S03",
+          "answer": true,
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "grounding_S05",
+          "answer": true,
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": true,
+          "correct": true
+        },
+        {
+          "question_name": "coverage_action",
+          "answer": "REMEDIATE_GAP",
+          "confidence": 0.99,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REMEDIATE_GAP",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "item_id": "replay_failure_run_20261021_034730",
+      "question_type": "replay_FAILURE",
+      "latency_ms": 1047,
+      "input_tokens": 560,
+      "output_tokens": 52,
+      "error": null,
+      "outcomes": [
+        {
+          "question_name": "failure_class",
+          "answer": "BUSINESS_RULE_VIOLATION",
+          "confidence": 0.97,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "BUSINESS_RULE_VIOLATION",
+          "correct": true
+        },
+        {
+          "question_name": "failure_action",
+          "answer": "REPORT_FAILURE",
+          "confidence": 0.95,
+          "probabilities": null,
+          "route": null,
+          "suggestion": "REPORT_FAILURE",
+          "correct": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "per_question_type": {
+      "ambiguity_BRxx": {
+        "n": 6,
+        "decider_accuracy": 1.0,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.5
+      },
+      "completion_action": {
+        "n": 4,
+        "decider_accuracy": 0.75,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.75
+      },
+      "coverage_action": {
+        "n": 6,
+        "decider_accuracy": 1.0,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.5
+      },
+      "failure_action": {
+        "n": 4,
+        "decider_accuracy": 0.5,
+        "bedrock_accuracy": 0.75,
+        "decider_escalation_rate": 1.0
+      },
+      "failure_class": {
+        "n": 6,
+        "decider_accuracy": 0.8333333333333334,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.3333333333333333
+      },
+      "grounding_Sxx": {
+        "n": 8,
+        "decider_accuracy": 0.75,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.625
+      },
+      "strategy_action": {
+        "n": 4,
+        "decider_accuracy": 1.0,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.75
+      }
+    },
+    "held_out_per_question_type": {
+      "ambiguity_BRxx": {
+        "n": 2,
+        "decider_accuracy": 1.0,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.5
+      },
+      "completion_action": {
+        "n": 2,
+        "decider_accuracy": 1.0,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.5
+      },
+      "failure_action": {
+        "n": 2,
+        "decider_accuracy": 0.5,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 1.0
+      },
+      "grounding_Sxx": {
+        "n": 2,
+        "decider_accuracy": 1.0,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 0.5
+      },
+      "strategy_action": {
+        "n": 2,
+        "decider_accuracy": 0.5,
+        "bedrock_accuracy": 1.0,
+        "decider_escalation_rate": 1.0
+      }
+    },
+    "threshold_sweep": {
+      "ambiguity_BRxx": {
+        "type": "noul",
+        "thresholds": [
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          0.5,
+          0.3333333333333333,
+          0.16666666666666666,
+          0.0,
+          0.0
+        ],
+        "auto_accuracy": [
+          1.0,
+          1.0,
+          1.0,
+          null,
+          null
+        ],
+        "current_threshold": 0.8
+      },
+      "completion_action": {
+        "type": "choice",
+        "thresholds": [
+          0.6,
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          0.5,
+          0.5,
+          0.5,
+          0.25,
+          0.25,
+          0.0
+        ],
+        "auto_accuracy": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          null
+        ],
+        "current_threshold": 0.75,
+        "top_probability_avg": 0.73955
+      },
+      "coverage_action": {
+        "type": "choice",
+        "thresholds": [
+          0.6,
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          1.0,
+          1.0,
+          0.8333333333333334,
+          0.5,
+          0.5,
+          0.5
+        ],
+        "auto_accuracy": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "current_threshold": 0.75,
+        "top_probability_avg": 0.8947499999999999
+      },
+      "failure_action": {
+        "type": "choice",
+        "thresholds": [
+          0.6,
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "auto_accuracy": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "current_threshold": 0.75,
+        "top_probability_avg": 0.678125
+      },
+      "failure_class": {
+        "type": "choice",
+        "thresholds": [
+          0.6,
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          0.6666666666666666,
+          0.6666666666666666,
+          0.6666666666666666,
+          0.6666666666666666,
+          0.5,
+          0.16666666666666666
+        ],
+        "auto_accuracy": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "current_threshold": 0.75,
+        "top_probability_avg": 0.7305666666666667
+      },
+      "grounding_Sxx": {
+        "type": "noul",
+        "thresholds": [
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          0.25,
+          0.125,
+          0.125,
+          0.0,
+          0.0
+        ],
+        "auto_accuracy": [
+          1.0,
+          1.0,
+          1.0,
+          null,
+          null
+        ],
+        "current_threshold": 0.8
+      },
+      "strategy_action": {
+        "type": "choice",
+        "thresholds": [
+          0.6,
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85
+        ],
+        "auto_rate": [
+          0.75,
+          0.25,
+          0.25,
+          0.25,
+          0.25,
+          0.25
+        ],
+        "auto_accuracy": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "current_threshold": 0.75,
+        "top_probability_avg": 0.77345
+      }
+    },
+    "latency": {
+      "decider_p50_ms": 718,
+      "decider_p95_ms": 1968,
+      "bedrock_p50_ms": 921,
+      "bedrock_p95_ms": 2860
+    },
+    "cost": {
+      "bedrock_avg_input_tokens": 701.0588235294117,
+      "bedrock_avg_output_tokens": 32.31372549019608,
+      "bedrock_cost_per_decision_usd": 0.0025878823529411764
+    },
+    "replay_fidelity": [
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "ambiguity_BR01",
+        "benchmark_confidence": 0.7125,
+        "live_confidence": 0.7025,
+        "diff": 0.010000000000000009,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "ambiguity_BR02",
+        "benchmark_confidence": 0.7047,
+        "live_confidence": 0.747,
+        "diff": 0.042300000000000004,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "ambiguity_BR03",
+        "benchmark_confidence": 0.7153,
+        "live_confidence": 0.7699,
+        "diff": 0.05459999999999998,
+        "flagged": true
+      },
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "ambiguity_BR04",
+        "benchmark_confidence": 0.7798,
+        "live_confidence": 0.8032,
+        "diff": 0.023399999999999976,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "ambiguity_BR05",
+        "benchmark_confidence": 0.8673,
+        "live_confidence": 0.8777,
+        "diff": 0.010400000000000076,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "ambiguity_BR06",
+        "benchmark_confidence": 0.7585,
+        "live_confidence": 0.7766,
+        "diff": 0.018100000000000005,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_ambiguity_strategy_run_20261021_034730",
+        "question_name": "strategy_action",
+        "benchmark_confidence": 0.8429,
+        "live_confidence": 0.8031,
+        "diff": 0.03979999999999995,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_coverage_run_20261021_034730",
+        "question_name": "grounding_S01",
+        "benchmark_confidence": 0.5109,
+        "live_confidence": 0.5968,
+        "diff": 0.08589999999999998,
+        "flagged": true
+      },
+      {
+        "item_id": "replay_coverage_run_20261021_034730",
+        "question_name": "grounding_S02",
+        "benchmark_confidence": 0.6939,
+        "live_confidence": 0.6458,
+        "diff": 0.04809999999999992,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_coverage_run_20261021_034730",
+        "question_name": "grounding_S03",
+        "benchmark_confidence": 0.5004,
+        "live_confidence": 0.5014,
+        "diff": 0.0010000000000000009,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_coverage_run_20261021_034730",
+        "question_name": "grounding_S05",
+        "benchmark_confidence": 0.6923,
+        "live_confidence": 0.6628,
+        "diff": 0.02950000000000008,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_coverage_run_20261021_034730",
+        "question_name": "coverage_action",
+        "benchmark_confidence": 0.6954,
+        "live_confidence": 0.6882,
+        "diff": 0.007199999999999984,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_failure_run_20261021_034730",
+        "question_name": "failure_class",
+        "benchmark_confidence": 0.7977,
+        "live_confidence": 0.7985,
+        "diff": 0.0008000000000000229,
+        "flagged": false
+      },
+      {
+        "item_id": "replay_failure_run_20261021_034730",
+        "question_name": "failure_action",
+        "benchmark_confidence": 0.2656,
+        "live_confidence": 0.273,
+        "diff": 0.007400000000000018,
+        "flagged": false
+      }
+    ],
+    "notes": [
+      "completion_action: self-reported confidence (avg 0.48) diverges from its top probability (avg 0.74) by 0.26 -- not corrected; decider_gate.gate.ConfidenceGate is unchanged.",
+      "failure_action: self-reported confidence (avg 0.36) diverges from its top probability (avg 0.68) by 0.32 -- not corrected; decider_gate.gate.ConfidenceGate is unchanged.",
+      "strategy_action: self-reported confidence (avg 0.55) diverges from its top probability (avg 0.77) by 0.23 -- not corrected; decider_gate.gate.ConfidenceGate is unchanged."
+    ]
+  }
+}
