@@ -4,13 +4,15 @@ An AI test-engineer agent for **payment retry & duplicate-charge prevention**. I
 
 Built for the AWS Agent Experience Hackathon, pattern `#guardrails`.
 
+**Demo video:** _link coming_ · **Write-up:** _link coming_
+
 ## The problem
 
 A customer pays $100 once. The gateway re-sends its success callback, the store records it twice, and the books show $200.
 
 **Impact:** Inflated revenue, failed reconciliations, and wrong refunds or orders shipped twice.
 
-**Mitigation:** The AI Test Engineer Agent builds and runs the tests; the Strands Decider checks each key decision so no scenario is missed. Test T04 catches the duplicate (expected 1 ledger entry, found 2) before it reaches production.
+**Mitigation:** Assurance Agent Experience builds and runs the tests; the Strands Decider checks each key decision so no scenario is missed. Test T04 catches the duplicate (expected 1 ledger entry, found 2) before it reaches production.
 
 ## How it works
 
@@ -91,8 +93,8 @@ Everything lands as plain JSON/Markdown under `runs/<run_id>/`: `interpretation.
 
 ## Why the Decider
 
-- **Speed and cost.** In our calibration benchmark (below), the Decider answered in **718ms (p50)** vs **921ms (p50)** for the same question put to Claude on Bedrock — and Bedrock costs roughly **$0.0026 per decision**; the Decider is a small, locally/EC2-hosted model with no per-call API cost.
-- **The safety property.** A small, fast, narrowly-scoped model is cheap enough to call at *every* key decision point, which means every key decision gets a confidence score and a human fallback — not just the ones expensive enough to justify an LLM call. Confidence routes; it never decides past a guard. The worst case for a wrong `AUTO` is a false negative that triggers a remediation cycle or a human review, never a wrongly-accepted bad artifact (see the one real exception below).
+- **Speed and cost.** In our calibration benchmark (below), the Decider answered in **718ms (p50)** / **1968ms (p95)** vs **921ms (p50)** / **2860ms (p95)** for the same question put to Claude on Bedrock. Bedrock costs roughly **$0.0026 per decision**; the Decider has no per-call API fee, but it runs on a GPU EC2 instance (g4dn.xlarge, roughly **$0.50/hour** while the instance is on).
+- **The safety property.** A small, fast, narrowly-scoped model is cheap enough to call at *every* key decision point, which means every key decision gets a confidence score and a human fallback — not just the ones expensive enough to justify an LLM call. Confidence routes; it never decides past a guard. In our benchmark the only wrong `AUTO` was a conservative false "no match" (see below); guards and human approval still back every step, but we don't claim a wrong `AUTO` can never let something through.
 
 ## Calibration results
 
@@ -107,9 +109,9 @@ Full methodology, the labeled benchmark, and both raw runs are in [`scripts/benc
 
 **AUTO-decision correctness** (after run, 41 labeled items): 21 AUTO decisions were made; **20/21 (95%) were correct**. The one exception: a real, non-held-out scenario (`grounding_S03`) was auto-decided "not grounded" (`false`) when it was actually faithful to its oracle — a **conservative failure mode**: a false "no match" pushes toward a coverage gap and a remediation/human-review cycle, never toward wrongly accepting a bad scenario as grounded.
 
-**Held-out items** (10 items, 2 per changed question type, labelled *before* any wording was written and never used to tune it): accuracy tracked the training set per type — where a type was weak in training (`failure_action`, `strategy_action`), it was weak held-out too, and where training improved, held-out did too. No sign the fixes were overfit to the exact items used to justify them, on this small sample.
+**Held-out items** (10 items, 2 per changed question type, labelled *before* any wording was written and never used to tune it): held-out items have no "before" run to compare against, but held-out accuracy tracked the after-fix training accuracy per type — where a type was still weak after fixing (`failure_action`, `strategy_action`), it was weak held-out too, and where a type scored well after fixing, held-out scored well too. No sign the fixes were overfit to the exact items used to justify them, on this small sample.
 
-**Decider vs Claude (Bedrock)**, same questions, same state, same run: Decider p50 **718ms** vs Claude p50 **921ms**; Claude cost ~**$0.0026/decision**; Claude's judgement was also *more accurate overall* in this sample (≈96% average vs ≈83% for the Decider across question types) — unsurprising for a 2B model vs a frontier LLM, and exactly why the Decider only *auto-decides the easy, high-confidence cases* and hands everything else to a human rather than trying to match Claude's judgement across the board.
+**Decider vs Claude (Bedrock)**, same questions, same state, same run: Decider p50 **718ms** / p95 **1968ms** vs Claude p50 **921ms** / p95 **2860ms**; Claude cost ~**$0.0026/decision**, the Decider has no per-call fee but runs on a GPU EC2 instance (g4dn.xlarge, ~**$0.50/hour** while on); Claude's judgement was also *more accurate overall* in this sample (≈96% average vs ≈83% for the Decider across question types) — unsurprising for a 2B model vs a frontier LLM, and exactly why the Decider only *auto-decides the easy, high-confidence cases* and hands everything else to a human rather than trying to match Claude's judgement across the board.
 
 **A measurement bug, found and fixed, not hidden:** the first "before" run showed 0% Bedrock accuracy on every true/false question. That was a benchmark-harness bug — it told Bedrock to answer with the quoted strings `"true"`/`"false"` instead of a real JSON boolean, so a correct answer never matched the label. Corrected offline from that same run's saved raw answers (no re-run): **67%** / **100%**. The harness was fixed before the "after" run; see `scripts/benchmark_decider.py`'s `_coerce_noul_answer`.
 
