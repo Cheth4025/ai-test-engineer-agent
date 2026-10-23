@@ -65,7 +65,7 @@ aws bedrock-runtime converse --model-id us.anthropic.claude-haiku-5-5 --region u
 | Laptop attempt (WSL2, CPU) | Install OK (Python 3.12 via uv, torch 2.14.1+cpu, strands-decider 0.1.0). Model download filled C: (0.5 GB free) → WSL disk went read-only. Recovered: deleted caches, compacted `ext4.vhdx` with diskpart → 9.2 GB free. **Decision: no local models; Decider runs on AWS.** |
 | AWS plan | Account is on the **Free plan**; `m7i.xlarge` not allowed. Upgrade to Paid plan failed ("An error occurred while processing your request") → retry / support case. **Needed before the GPU instance.** |
 | IAM role | `aite-demo-ec2-role`: AmazonSSMManagedInstanceCore + inline `aite-bedrock-invoke`. |
-| CPU host | `i-07e5e8954a1db1bb9` `aite-decider-cpu`, **m7i-flex.large** (free-tier eligible, 2 vCPU, 7.6 GB), Ubuntu 24.04, 30 GiB gp3, no inbound rules, Session Manager access, 8 GB swap file. |
+| CPU host | `<INSTANCE_ID>` `aite-decider-cpu`, **m7i-flex.large** (free-tier eligible, 2 vCPU, 7.6 GB), Ubuntu 24.04, 30 GiB gp3, no inbound rules, Session Manager access, 8 GB swap file. |
 | Model | `StrandsAgents/strands-decider-2B-hobson-v19` (4.55 GB) + base `Qwen/Qwen3.5-2B-Base` downloaded from Hugging Face. Response reports `"model": "strands-decider-0.1.0"`. |
 | First decision | COVERAGE choice → **REMEDIATE_GAP**, probabilities ACCEPT 0.4527 / REMEDIATE 0.5473, **confidence 0.0946**. Correct but uncertain → would escalate under τ = 0.9. |
 | Latency | `real 11m24s`, `user 29s`: dominated by model load + swapping (fp32 ≈ 8 GB on a 7.6 GB host). Not representative. Library hint: install `flash-linear-attention` for the optimized kernel (GPU). |
@@ -99,7 +99,7 @@ aws bedrock-runtime converse --model-id us.anthropic.claude-haiku-5-5 --region u
 | GPU quota | **Approved** (8.0, CASE_CLOSED). |
 | Paid plan | Launch failed with `InvalidParameterCombination: ... not eligible for Free Tier` until the **root user** ran Upgrade plan → email "Your AWS account was upgraded to a paid plan" (20:04). IAM admin upgrade kept failing. |
 | Claude 5.5 | Still AccessDenied after the upgrade; continue on Sonnet 4.6 / Haiku 4.5. |
-| GPU host | `i-0c9c7bfbc66fe2cc9` `aite-decider-gpu`, g4dn.xlarge, AMI `ami-028357be7d5b15c53` (Deep Learning Base OSS Nvidia Driver GPU AMI, Ubuntu 24.04, 20261006), 100 GiB gp3, SG `sg-054599432ab2713b9` (no inbound), role `aite-demo-ec2-role`. Launched via CLI. |
+| GPU host | `<INSTANCE_ID>` `aite-decider-gpu`, g4dn.xlarge, AMI `<AMI_ID>` (Deep Learning Base OSS Nvidia Driver GPU AMI, Ubuntu 24.04, 20261006), 100 GiB gp3, SG `<SG_ID>` (no inbound), role `aite-demo-ec2-role`. Launched via CLI. |
 | Stack | Driver 595.91, CUDA 13.2, torch 2.14.1+cu130 → `True Tesla T4`; strands-decider 0.1.0; flash-linear-attention 0.5.2 (works on T4; first request compiles ~60 s); `causal_conv1d` not installed (reference fallback). |
 | Server | `strands-decider serve StrandsAgents/strands-decider-2B-hobson-v19 --device cuda --port 8000` in tmux; `/health` reports base Qwen/Qwen3.5-2B-Base, 24 slots, max_length 4096, prefix cache on. |
 

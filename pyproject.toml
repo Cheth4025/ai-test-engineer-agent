@@ -3,7 +3,7 @@ name = "ai-test-engineer-agent"
 version = "0.1.0"
 description = "AI Test Engineer Agent -- Payment Retry & Duplicate Charge Prevention"
 requires-python = ">=3.12"
-license = "Apache-2.0"
+license = "MIT"
 dependencies = [
     "httpx>=0.28.1",
     "strands-agents>=1.61.0",
